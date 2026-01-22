@@ -1,6 +1,6 @@
 
 class Pathfinder {
-  findPath(startf, endf, avoid_estate, avoid_water) {
+  findPath(startf, endf, avoid_estate, avoid_water, custom_is_blocked) {
     if (!startf || !endf) {
        return null;
     }
@@ -12,6 +12,7 @@ class Pathfinder {
     }
     var self = this;
     var c_Walk = function(a, b) {
+      if (custom_is_blocked && custom_is_blocked(b)) return false;
       return self.canWalk(a, b, avoid_estate, avoid_water);
     };
     var tiles = [];
@@ -106,20 +107,17 @@ class Pathfinder {
   }
 
   getDistance(a, b) {
-    var acx = a.fx * 5;
-    var bcx = b.fx * 5;
-    var acy, bcy;
-    if (a.fx % 2 == 0) {
-      acy = a.fy * 10;
-    } else {
-      acy = a.fy * 10 + 5;
-    }
-    if (b.fx % 2 == 0) {
-      bcy = b.fy * 10;
-    } else {
-      bcy = b.fy * 10 + 5;
-    }
-    return Math.sqrt(Math.pow(acx - bcx, 2) + Math.pow(acy - bcy, 2));
+    var aq = a.fx;
+    var ar = a.fy - (a.fx - (a.fx & 1)) / 2;
+    
+    var bq = b.fx;
+    var br = b.fy - (b.fx - (b.fx & 1)) / 2;
+    
+    var dq = Math.abs(aq - bq);
+    var dr = Math.abs(ar - br);
+    var ds = Math.abs((aq + ar) - (bq + br)); 
+    
+    return (dq + dr + ds) / 2;
   }
 
   getFurtherNeighbours(field) {
