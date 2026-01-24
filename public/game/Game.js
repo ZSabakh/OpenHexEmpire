@@ -3,7 +3,7 @@ import { Pathfinder } from '../../shared/Pathfinder.js';
 import { Utils, Random } from './Utils.js';
 import { GameView } from './GameView.js';
 import { MapRender } from './MapRender.js';
-import { MapGenerator } from './MapGenerator.js';
+import { MapGeneratorClient } from './MapGeneratorClient.js';
 import { GameLogic } from './GameLogic.js';
 import { Bot } from './Bot.js';
 
@@ -125,7 +125,7 @@ export class Game {
      const random = new Random(mapNumber);
      
      // Generators & Logic
-     this.mapGenerator = new MapGenerator(this.state, random, this.pathfinder);
+     this.mapGenerator = new MapGeneratorClient(this.state, random, this.pathfinder);
      this.logic = new GameLogic(this.state, this.pathfinder, this.bot);
 
      // Generate Logic Map

@@ -1,9 +1,8 @@
-import { Config } from '../../shared/Config.js';
-import { Utils } from './Utils.js';
+import { Config } from './Config.js';
 
 export class MapGenerator {
-    constructor(gameState, random, pathfinder) {
-        this.state = gameState;
+    constructor(gameModel, random, pathfinder) {
+        this.model = gameModel;
         this.random = random; // Instance of Random class
         this.pathfinder = pathfinder;
         this.townNames = this.getTownNames();
@@ -11,16 +10,16 @@ export class MapGenerator {
 
     generate() {
         // 1. Initialize Fields
-        for (let x = 0; x < this.state.width; x++) {
-            for (let y = 0; y < this.state.height; y++) {
+        for (let x = 0; x < this.model.width; x++) {
+            for (let y = 0; y < this.model.height; y++) {
                 this.addField(x, y);
             }
         }
 
         // 2. Link Neighbours
-        for (let x = 0; x < this.state.width; x++) {
-            for (let y = 0; y < this.state.height; y++) {
-                this.findNeighbours(this.state.getField(x, y));
+        for (let x = 0; x < this.model.width; x++) {
+            for (let y = 0; y < this.model.height; y++) {
+                this.findNeighbours(this.model.getField(x, y));
             }
         }
 
@@ -35,7 +34,7 @@ export class MapGenerator {
         this.generateTowns();
         
         // 6. Shuffle Towns (for random port connections)
-        this.state.allTowns = this.random.shuffle(this.state.allTowns);
+        this.model.allTowns = this.random.shuffle(this.model.allTowns);
 
         // 7. Place Ports
         this.generatePorts();
@@ -48,8 +47,6 @@ export class MapGenerator {
         const field = {
             fx: x,
             fy: y,
-            _x: 0,
-            _y: 0,
             type: "water", // Default
             estate: null,
             party: -1,
@@ -65,36 +62,25 @@ export class MapGenerator {
             land_id: -1,
         };
 
-        // Calculate Pixel Coordinates
-        field._x = x * (this.state.hexWidth * 0.75) + this.state.hexWidth / 2;
-        field._y = (x % 2 === 0) 
-            ? y * this.state.hexHeight + this.state.hexHeight / 2 
-            : y * this.state.hexHeight + this.state.hexHeight;
-
-        // Top edge depth fix (legacy?)
-        if (x === this.state.width - 1 && y === this.state.height - 1) {
-            Config.MAP.TOP_FIELD_DEPTH = -1; 
-        }
-
         // Initial Random Land/Water
         // Fixed corners are always land
         if ((x === 1 && y === 1) ||
-            (x === this.state.width - 2 && y === 1) ||
-            (x === this.state.width - 2 && y === this.state.height - 2) ||
-            (x === 1 && y === this.state.height - 2)) {
+            (x === this.model.width - 2 && y === 1) ||
+            (x === this.model.width - 2 && y === this.model.height - 2) ||
+            (x === 1 && y === this.model.height - 2)) {
             field.type = "land";
         } else {
             // 20% chance of land initially
             field.type = this.random.next(10) <= 1 ? "land" : "water";
         }
 
-        this.state.setField(x, y, field);
+        this.model.setField(x, y, field);
     }
 
     findNeighbours(field) {
         const x = field.fx;
         const y = field.fy;
-        const get = (nx, ny) => this.state.getField(nx, ny);
+        const get = (nx, ny) => this.model.getField(nx, ny);
 
         if (x % 2 === 0) {
             field.neighbours[0] = get(x + 1, y);
@@ -115,9 +101,9 @@ export class MapGenerator {
 
     setLandFields() {
         // Expand land if surrounded by land
-        for (let x = 0; x < this.state.width; x++) {
-            for (let y = 0; y < this.state.height; y++) {
-                const field = this.state.getField(x, y);
+        for (let x = 0; x < this.model.width; x++) {
+            for (let y = 0; y < this.model.height; y++) {
+                const field = this.model.getField(x, y);
                 if (field.type === "water") {
                     let landCount = 0;
                     for (let n = 0; n < 6; n++) {
@@ -130,16 +116,16 @@ export class MapGenerator {
             }
         }
         // Apply expansion
-        for (let x = 0; x < this.state.width; x++) {
-            for (let y = 0; y < this.state.height; y++) {
-                const field = this.state.getField(x, y);
+        for (let x = 0; x < this.model.width; x++) {
+            for (let y = 0; y < this.model.height; y++) {
+                const field = this.model.getField(x, y);
                 if (field.tl) field.type = "land";
             }
         }
         // Remove isolated water (lakes)
-        for (let x = 0; x < this.state.width; x++) {
-            for (let y = 0; y < this.state.height; y++) {
-                const field = this.state.getField(x, y);
+        for (let x = 0; x < this.model.width; x++) {
+            for (let y = 0; y < this.model.height; y++) {
+                const field = this.model.getField(x, y);
                 if (field.type === "water") {
                     let waterCount = 0;
                     for (let n = 0; n < 6; n++) {
@@ -155,13 +141,13 @@ export class MapGenerator {
 
     generateLands() {
         // Group connected lands into clusters
-        for (let x = 0; x < this.state.width; x++) {
-            for (let y = 0; y < this.state.height; y++) {
-                const field = this.state.getField(x, y);
+        for (let x = 0; x < this.model.width; x++) {
+            for (let y = 0; y < this.model.height; y++) {
+                const field = this.model.getField(x, y);
                 if (field.type === "land" && field.land_id < 0) {
-                    const landId = this.state.lands.length;
-                    this.state.lands.push([]);
-                    this.state.lands[landId].push(field);
+                    const landId = this.model.lands.length;
+                    this.model.lands.push([]);
+                    this.model.lands[landId].push(field);
                     field.land_id = landId;
 
                     // Flood fill
@@ -172,7 +158,7 @@ export class MapGenerator {
                             const neighbor = current.neighbours[n];
                             if (neighbor && neighbor.type === "land" && neighbor.land_id < 0) {
                                 neighbor.land_id = landId;
-                                this.state.lands[landId].push(neighbor);
+                                this.model.lands[landId].push(neighbor);
                                 stack.push(neighbor);
                             }
                         }
@@ -187,21 +173,21 @@ export class MapGenerator {
         // Fixed locations for capitals near corners
         const locations = [
             { x: 1, y: 1 },
-            { x: this.state.width - 2, y: 1 },
-            { x: this.state.width - 2, y: this.state.height - 2 },
-            { x: 1, y: this.state.height - 2 }
+            { x: this.model.width - 2, y: 1 },
+            { x: this.model.width - 2, y: this.model.height - 2 },
+            { x: 1, y: this.model.height - 2 }
         ];
 
         for (const loc of locations) {
-            const field = this.state.getField(loc.x, loc.y);
+            const field = this.model.getField(loc.x, loc.y);
             if (field) {
                 field.estate = "town";
-                this.state.allTowns.push(field);
+                this.model.allTowns.push(field);
                 field.capital = cp;
-                this.state.parties[cp].capital = field;
+                this.model.parties[cp].capital = field;
                 // Annex immediately (handled by GameLogic usually, but here we set initial state)
                 field.party = cp;
-                this.state.parties[cp].towns.push(field);
+                this.model.parties[cp].towns.push(field);
                 
                 cp++;
             }
@@ -210,8 +196,8 @@ export class MapGenerator {
 
     generateTowns() {
         // Distribute towns based on land mass size
-        for (let landNum = 0; landNum < this.state.lands.length; landNum++) {
-            const landMass = this.state.lands[landNum];
+        for (let landNum = 0; landNum < this.model.lands.length; landNum++) {
+            const landMass = this.model.lands[landNum];
             const townCount = Math.floor(landMass.length / 10) + 1;
 
             for (let i = 0; i < townCount; i++) {
@@ -234,7 +220,7 @@ export class MapGenerator {
                         }
                         if (ok) {
                             field.estate = "town";
-                            this.state.allTowns.push(field);
+                            this.model.allTowns.push(field);
                             created = true;
                         }
                     }
@@ -246,9 +232,9 @@ export class MapGenerator {
     generatePorts() {
         // Connect towns with paths, if path crosses water, create port
         let portNum = 0;
-        for (let i = 0; i < this.state.allTowns.length - 1; i++) {
-            const start = this.state.allTowns[i];
-            const end = this.state.allTowns[i + 1];
+        for (let i = 0; i < this.model.allTowns.length - 1; i++) {
+            const start = this.model.allTowns[i];
+            const end = this.model.allTowns[i + 1];
 
             // Try to find land path first
             let path = this.pathfinder.findPath(start, end, ["town"], true);
@@ -278,9 +264,9 @@ export class MapGenerator {
     }
 
     assignTownNames() {
-        for (let x = 0; x < this.state.width; x++) {
-            for (let y = 0; y < this.state.height; y++) {
-                const field = this.state.getField(x, y);
+        for (let x = 0; x < this.model.width; x++) {
+            for (let y = 0; y < this.model.height; y++) {
+                const field = this.model.getField(x, y);
                 if (field.estate === "town" || field.estate === "port") {
                     field.town_name = this.getRandomTownName();
                 }
