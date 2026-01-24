@@ -1,4 +1,4 @@
-import { Config } from './Config.js';
+import { Config } from '../../shared/Config.js';
 import { Utils } from './Utils.js';
 
 export class MapGenerator {

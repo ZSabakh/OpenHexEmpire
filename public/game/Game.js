@@ -1,10 +1,10 @@
-import { Config } from './Config.js';
+import { Config } from '../../shared/Config.js';
+import { Pathfinder } from '../../shared/Pathfinder.js';
 import { Utils, Random } from './Utils.js';
 import { GameState } from './GameState.js';
 import { MapRender } from './MapRender.js';
 import { MapGenerator } from './MapGenerator.js';
 import { GameLogic } from './GameLogic.js';
-import { Pathfinder } from './Pathfinder.js';
 import { Bot } from './Bot.js';
 
 export class Game {

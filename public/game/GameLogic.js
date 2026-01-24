@@ -1,4 +1,4 @@
-import { Config } from './Config.js';
+import { Config } from '../../shared/Config.js';
 import { Animations } from './Animations.js';
 
 export class GameLogic {
