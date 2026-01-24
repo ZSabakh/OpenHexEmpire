@@ -4,11 +4,10 @@ $(function(){
   // Initialize Materialize
   M.AutoInit();
 
-  const canvas = document.getElementById('map');
+  const dynamicCanvas = document.getElementById('dynamicCanvas');
   
   // Fixed canvas size for HiDPI support (handled in index.ejs and CSS)
-  // canvas.style.width = '100%';
-  // canvas.style.height = 'auto';
+  // Both canvases are styled in the HTML
 
   // Initialize modal explicitly
   var modalElem = document.getElementById('countrySelectModal');
@@ -108,10 +107,11 @@ $(function(){
       game.drawGame();
   });
 
-  canvas.addEventListener('mousedown', function(e) {
+  // Use dynamicCanvas for mouse events (it's on top)
+  dynamicCanvas.addEventListener('mousedown', function(e) {
       game.handleInput(e);
   });
-  canvas.addEventListener('mousemove', function(e) {
+  dynamicCanvas.addEventListener('mousemove', function(e) {
       game.handleMouseMove(e);
   });
 

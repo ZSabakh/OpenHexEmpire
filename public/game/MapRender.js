@@ -7,16 +7,48 @@ export class MapRender {
     this.images = null;
     this.cachedEstates = null;
     this.lastState = null;
+    this.staticNeedsRedraw = true;
+    this.lastTerritoryHash = null;
   }
 
   drawMap(state, images, cursorPos) {
     if (this.lastState !== state) {
         this.cacheEstates(state);
         this.lastState = state;
+        this.staticNeedsRedraw = true;
     }
 
     this.images = images;
-    const canvas = document.getElementById('map');
+
+    const currentHash = this.getTerritoryHash(state);
+    if (currentHash !== this.lastTerritoryHash) {
+        this.staticNeedsRedraw = true;
+        this.lastTerritoryHash = currentHash;
+    }
+
+    if (this.staticNeedsRedraw) {
+        this.drawStaticLayer(state);
+        this.staticNeedsRedraw = false;
+    }
+
+    this.drawDynamicLayer(state, cursorPos);
+  }
+
+  getTerritoryHash(state) {
+    let hash = '';
+    for (let x = 0; x < state.width; x++) {
+      for (let y = 0; y < state.height; y++) {
+        const field = state.getField(x, y);
+        hash += field.party + ',';
+      }
+    }
+    return hash;
+  }
+
+  drawStaticLayer(state) {
+    const canvas = document.getElementById('staticCanvas');
+    if (!canvas) return;
+    
     const ctx = canvas.getContext('2d');
 
     // Scale context for HiDPI
@@ -45,17 +77,47 @@ export class MapRender {
         ctx.shadowBlur = 0;
     }
 
-    // 3. Dynamic Elements (Hex Tints, Grid, Cities)
+    // 3. Territory Elements (Hex Tints, Grid, Cities)
     this.drawGridAndTerritory(ctx, state);
 
     // 4. Borders
     this.drawTerritoryBorders(ctx, state);
+  }
 
-    // 5. Units
+  drawDynamicLayer(state, cursorPos) {
+    const canvas = document.getElementById('dynamicCanvas');
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+
+    ctx.setTransform(2, 0, 0, 2, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    ctx.clearRect(0, 0, state.pixelWidth, state.pixelHeight);
+
+    // 1. Movable unit highlights
+    this.drawMovableUnitHighlights(ctx, state);
+
+    // 2. Units
     this.drawUnits(ctx, state);
     
-    // 6. Labels (Names & Stats)
+    // 3. Labels (Names & Stats)
     this.drawLabels(ctx, state, cursorPos);
+  }
+
+  drawMovableUnitHighlights(ctx, state) {
+    // Draw yellow highlights for movable units
+    if (state.turnParty !== state.humanPlayerId) return;
+    
+    for (let x = 0; x < state.width; x++) {
+      for (let y = 0; y < state.height; y++) {
+        const field = state.getField(x, y);
+        if (field.army && !field.army.moved && field.army.party === state.humanPlayerId) {
+          this.drawHexTile(ctx, field._x, field._y, "rgba(255, 255, 0, 0.5)");
+        }
+      }
+    }
   }
 
   drawUnits(ctx, state) {
@@ -108,22 +170,15 @@ export class MapRender {
       }
      }
 
-     // Pass 2: Grid & Territory Tint
+     // Pass 2: Grid & Territory Tint (without movable unit highlight)
      for (let x = 0; x < state.width; x++) {
       for (let y = 0; y < state.height; y++) {
         const field = state.getField(x, y);
         const xCenter = field._x;
         const yCenter = field._y;
 
-        // Movable Unit Highlight
-        let drawn = false;
-        if (state.turnParty === state.humanPlayerId && field.army && !field.army.moved && field.army.party === state.humanPlayerId) {
-             this.drawHexTile(ctx, xCenter, yCenter, "rgba(255, 255, 0, 0.5)");
-             drawn = true;
-        }
-
         // Territory Tint
-        if (!drawn && field.party !== -1) {
+        if (field.party !== -1) {
             const rgb = Config.COLORS.PARTY_RGB[field.party] || "0,0,0";
             let alpha = 0.01;
             if (field.party === state.humanPlayerId) {
@@ -466,7 +521,8 @@ export class MapRender {
   }
 
   drawSelection(field) {
-     const ctx = document.getElementById('map').getContext('2d');
+     const ctx = document.getElementById('dynamicCanvas').getContext('2d');
+     ctx.setTransform(2, 0, 0, 2, 0, 0);
      const x = field._x;
      const y = field._y;
     
@@ -484,7 +540,8 @@ export class MapRender {
   }
   
   drawValidMoves(fields, state) {
-    const ctx = document.getElementById('map').getContext('2d');
+    const ctx = document.getElementById('dynamicCanvas').getContext('2d');
+    ctx.setTransform(2, 0, 0, 2, 0, 0);
     for (const field of fields) {
       let color = "rgba(255, 255, 255, 0.4)"; 
       if (field.army) {
@@ -499,7 +556,8 @@ export class MapRender {
   }
 
   drawHover(field) {
-    const ctx = document.getElementById('map').getContext('2d');
+    const ctx = document.getElementById('dynamicCanvas').getContext('2d');
+    ctx.setTransform(2, 0, 0, 2, 0, 0);
     const xCenter = field._x;
     const yCenter = field._y;
     

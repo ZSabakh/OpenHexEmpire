@@ -86,10 +86,10 @@ export class Game {
   generateNewMap(mapNumber) {
     this.mapNumber = mapNumber;
     
-    // Resize canvas
-    const canvas = document.getElementById('map');
-    // We calculate size from Config directly, but better to wait for State initialization or use constants?
-    // GameState constructor uses constants, so we can calculate here too.
+    // Resize both canvases
+    const staticCanvas = document.getElementById('staticCanvas');
+    const dynamicCanvas = document.getElementById('dynamicCanvas');
+    
     const width = Config.MAP.WIDTH;
     const height = Config.MAP.HEIGHT;
     const hexWidth = Config.MAP.HEX_WIDTH;
@@ -97,8 +97,15 @@ export class Game {
     const pixelWidth = Math.ceil((width - 1) * (hexWidth * 0.75) + hexWidth);
     const pixelHeight = (height - 1) * hexHeight + hexHeight + (hexHeight / 2);
 
-    canvas.width = pixelWidth * 2;
-    canvas.height = pixelHeight * 2;
+    if (staticCanvas) {
+      staticCanvas.width = pixelWidth * 2;
+      staticCanvas.height = pixelHeight * 2;
+    }
+    
+    if (dynamicCanvas) {
+      dynamicCanvas.width = pixelWidth * 2;
+      dynamicCanvas.height = pixelHeight * 2;
+    }
 
     // Load Images
     const imagesToLoad = [];
@@ -396,7 +403,7 @@ export class Game {
   }
 
   handleMouseMove(event) {
-    const canvas = document.getElementById('map');
+    const canvas = document.getElementById('dynamicCanvas');
     const pos = this.getMousePos(canvas, event);
     this.cursorPos = pos;
     const fieldXY = this.getFieldXYFromScreenXY(pos.x, pos.y);
@@ -413,7 +420,7 @@ export class Game {
       if (this.state.turnParty !== this.state.humanPlayerId) return;
       if (this.humanMovesLeft <= 0) return;
 
-      const canvas = document.getElementById('map');
+      const canvas = document.getElementById('dynamicCanvas');
       const pos = this.getMousePos(canvas, event);
       const fieldXY = this.getFieldXYFromScreenXY(pos.x, pos.y);
       if (!fieldXY) return;
