@@ -1,4 +1,48 @@
 
+class Queue {
+  constructor() {
+    this.items = [];
+    this.head = 0;
+  }
+
+  push(item) {
+    this.items.push(item);
+  }
+
+  isEmpty() {
+    return this.head >= this.items.length;
+  }
+
+  get length() {
+    return this.items.length - this.head;
+  }
+
+  popLowest() {
+    if (this.isEmpty()) return null;
+
+    let bestIndex = this.head;
+    let bestDC = this.items[bestIndex].dc;
+
+    for (let i = this.head + 1; i < this.items.length; i++) {
+      if (this.items[i].dc < bestDC) {
+        bestDC = this.items[i].dc;
+        bestIndex = i;
+      }
+    }
+
+    if (bestIndex !== this.head) {
+        const temp = this.items[this.head];
+        this.items[this.head] = this.items[bestIndex];
+        this.items[bestIndex] = temp;
+    }
+    
+    const item = this.items[this.head];
+    this.items[this.head] = null; 
+    this.head++;
+    return item;
+  }
+}
+
 class Pathfinder {
   findPath(startf, endf, avoid_estate, avoid_water, custom_is_blocked) {
     if (!startf || !endf) {
@@ -15,15 +59,19 @@ class Pathfinder {
       if (custom_is_blocked && custom_is_blocked(b)) return false;
       return self.canWalk(a, b, avoid_estate, avoid_water);
     };
-    var tiles = [];
+    
+    var queue = new Queue();
     var path = [];
     var field1 = {};
     var field2 = {};
-    tiles.push({ field:startf });
-    tiles[tiles.length - 1].tc = 0;
+    
+    queue.push({ field: startf, tc: 0 }); 
+    
     const move_cost = [5, 5, 5, 5, 5, 5];
-    while ((path.length == 0 || (path.length > 0 && path[path.length - 1].field != endf)) && tiles.length > 0) {
-      var currentTile = tiles.shift();
+    
+    while ((path.length == 0 || (path.length > 0 && path[path.length - 1].field != endf)) && !queue.isEmpty()) {
+      var currentTile = queue.popLowest();
+      
       for (var neighborNum = 0; neighborNum < 6; neighborNum++) {
         if(c_Walk(currentTile.field, currentTile.field.neighbours[neighborNum])
           || currentTile.field.neighbours[neighborNum] == endf) {
@@ -33,31 +81,24 @@ class Pathfinder {
           newTile.parent = currentTile;
           newTile.dc = move_cost[neighborNum] + distance;
           newTile.tc = currentTile.tc + move_cost[neighborNum];
-          if (field2[this.getFieldStrO(newTile.field)] == undefined) {
-            if (field1[this.getFieldStrO(newTile.field)] == undefined) {
-              field1[this.getFieldStrO(newTile.field)] = tiles.length;
-              tiles.push(newTile);
+          
+          var fieldStr = this.getFieldStrO(newTile.field);
+          
+          if (field2[fieldStr] == undefined) {
+            if (field1[fieldStr] == undefined) {
+              field1[fieldStr] = true;
+              queue.push(newTile);
             }
-          } else if (path[field2[this.getFieldStrO(newTile.field)]].tc > newTile.tc) {
-            path[field2[this.getFieldStrO(newTile.field)]] = newTile;
+          } else if (path[field2[fieldStr]].tc > newTile.tc) {
+            path[field2[fieldStr]] = newTile;
           }
         }
       }
       field2[this.getFieldStrO(currentTile.field)] = path.length;
       path.push(currentTile);
-      if (tiles.length > 0) {
-        var tileForSwap = 0;
-        for (var tileNum = 1; tileNum < tiles.length; tileNum++) {
-          if (tiles[tileNum].dc < tiles[tileForSwap].dc) {
-            tileForSwap = tileNum;
-          }
-        }
-        var temp = tiles[0];
-        tiles[0] = tiles[tileForSwap];
-        tiles[tileForSwap] = temp;
-      }
     }
-    if (tiles.length == 0) {
+    
+    if (path.length == 0 || path[path.length - 1].field != endf) {
        return null;
     }
     var finalPath = [];
@@ -65,7 +106,6 @@ class Pathfinder {
     while (finalPath[finalPath.length - 1] != startf)
     {
        finalPath.push(path[pathIndex].field);
-       // Added to prevent undefined error
        if (!path[pathIndex].parent) {
          break;
        }

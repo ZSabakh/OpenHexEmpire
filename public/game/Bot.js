@@ -116,7 +116,7 @@ export class Bot {
       }
 
       let avoidWater = true;
-      if (army.field.type === 'water') avoidWater = false;
+      if (army.field.type === 'water' || army.field.estate === 'port') avoidWater = false;
       const isBlocked = null; 
 
       let path = this.pathfinder.findPath(army.field, targetField, [], avoidWater, isBlocked); 
