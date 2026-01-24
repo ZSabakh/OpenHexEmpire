@@ -5,6 +5,11 @@ export class Bot {
     this.pathfinder = pathfinder;
     this.mode = 'EXPANSION';
     this.threat = null; 
+    this.pathCache = new Map();
+  }
+
+  clearCache() {
+    this.pathCache.clear();
   }
 
   updateMode(state, partyId) {
@@ -115,8 +120,15 @@ export class Bot {
          return this.getGreedyStep(army.field, targetField); 
       }
 
-      let avoidWater = true;
-      if (army.field.type === 'water' || army.field.estate === 'port') avoidWater = false;
+      const startKey = this.pathfinder.getFieldStrO(army.field);
+      const endKey = this.pathfinder.getFieldStrO(targetField);
+      const avoidWater = !(army.field.type === 'water' || army.field.estate === 'port');
+      const cacheKey = `${startKey}_${endKey}_${avoidWater}`;
+
+      if (this.pathCache.has(cacheKey)) {
+          return this.pathCache.get(cacheKey);
+      }
+
       const isBlocked = null; 
 
       let path = this.pathfinder.findPath(army.field, targetField, [], avoidWater, isBlocked); 
@@ -125,10 +137,12 @@ export class Bot {
            path = this.pathfinder.findPath(army.field, targetField, [], false, isBlocked);
       }
 
+      let result = null;
       if (path && path.length > 0) {
-          return path[0]; 
+          result = path[0]; 
       }
-      return null;
+      this.pathCache.set(cacheKey, result);
+      return result;
   }
 
   getGreedyStep(start, target) {

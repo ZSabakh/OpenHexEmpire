@@ -114,6 +114,7 @@ export class Game {
 
   startNewGame(mapNumber) {
      this.state = new GameState();
+     this.bot.clearCache();
      const random = new Random(mapNumber);
      
      // Generators & Logic
@@ -321,6 +322,9 @@ export class Game {
   }
 
   runComputerTurn(partyId) {
+     // Clear AI cache at the start of the turn so it reacts to the new board state
+     this.bot.clearCache();
+
      // Duel logic check
      let surviving = 0;
      for (const p of this.state.parties) {
