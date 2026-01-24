@@ -8,6 +8,8 @@ export class GameRoom {
         this.roomId = roomId;
         this.mapSeed = mapSeed;
         this.players = new Map();
+        this.factionSelections = {};
+        this.readyStatus = {};
         this.gameModel = null;
         this.maxPlayers = 4;
         this.gameStarted = false;
@@ -35,32 +37,71 @@ export class GameRoom {
             return { success: false, error: 'Game already started' };
         }
 
-        // Assign next available party
-        const partyId = this.players.size;
-        
         this.players.set(socketId, {
             playerId: socketId,
-            partyId: partyId,
-            name: playerName || `Player ${partyId + 1}`
+            partyId: null,
+            name: playerName || `Player ${this.players.size + 1}`
         });
 
-        console.log(`[GameRoom ${this.roomId}] Player ${playerName} joined as party ${partyId}`);
+        console.log(`[GameRoom ${this.roomId}] Player ${playerName} joined (faction not yet chosen)`);
 
         return {
             success: true,
-            partyId: partyId,
-            playerName: playerName || `Player ${partyId + 1}`
+            partyId: null,
+            playerName: playerName || `Player ${this.players.size + 1}`
         };
+    }
+
+    setFactionSelection(partyId, playerName) {
+        this.factionSelections[partyId] = playerName;
+        console.log(`[GameRoom ${this.roomId}] Faction ${partyId} selected by ${playerName}`);
+    }
+
+    getFactionSelections() {
+        return this.factionSelections;
+    }
+
+    setPlayerReady(socketId, isReady) {
+        const player = this.players.get(socketId);
+        if (player && player.partyId !== null) {
+            this.readyStatus[player.partyId] = isReady;
+            console.log(`[GameRoom ${this.roomId}] Player ${player.name} (faction ${player.partyId}) ready status: ${isReady}`);
+            return true;
+        }
+        return false;
+    }
+
+    getReadyStatus() {
+        return this.readyStatus;
+    }
+
+    getReadyCount() {
+        return Object.values(this.readyStatus).filter(status => status === true).length;
+    }
+
+    getTotalPlayersWithFactions() {
+        return Object.keys(this.factionSelections).length;
+    }
+
+    areAllPlayersReady() {
+        const totalPlayers = this.getTotalPlayersWithFactions();
+        const readyPlayers = this.getReadyCount();
+        return totalPlayers > 0 && readyPlayers === totalPlayers;
     }
 
     removePlayer(socketId) {
         const player = this.players.get(socketId);
         if (player) {
+            if (player.partyId !== null) {
+                delete this.factionSelections[player.partyId];
+                console.log(`[GameRoom ${this.roomId}] Cleared faction ${player.partyId} for leaving player`);
+            }
+            
             this.players.delete(socketId);
             console.log(`[GameRoom ${this.roomId}] Player ${player.name} left`);
-            return true;
+            return { removed: true, partyId: player.partyId };
         }
-        return false;
+        return { removed: false };
     }
 
     getGameState() {
@@ -105,6 +146,16 @@ export class GameRoom {
             totalPower: party.totalPower,
             control: party.control
         }));
+    }
+
+    getMapData() {
+        return {
+            mapSeed: this.mapSeed,
+            fields: this.serializeFields(),
+            parties: this.serializeParties(),
+            width: this.gameModel.width,
+            height: this.gameModel.height
+        };
     }
 
     startGame() {

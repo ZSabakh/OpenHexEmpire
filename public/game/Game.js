@@ -20,6 +20,8 @@ export class Game {
     this.hoveredField = null;
     this.cursorPos = { x: 0, y: 0 };
     this.totalMovesForTurn = 0;
+    this.battleStarted = false;
+    this.waitingForReady = false;
     
     // Animation Loop
     this.lastTime = 0;
@@ -119,6 +121,168 @@ export class Game {
     });
   }
 
+  loadServerMap(mapData) {
+    this.mapNumber = mapData.mapSeed;
+    
+    // Resize both canvases
+    const staticCanvas = document.getElementById('staticCanvas');
+    const dynamicCanvas = document.getElementById('dynamicCanvas');
+    
+    const width = Config.MAP.WIDTH;
+    const height = Config.MAP.HEIGHT;
+    const hexWidth = Config.MAP.HEX_WIDTH;
+    const hexHeight = Config.MAP.HEX_HEIGHT;
+    const pixelWidth = Math.ceil((width - 1) * (hexWidth * 0.75) + hexWidth);
+    const pixelHeight = (height - 1) * hexHeight + hexHeight + (hexHeight / 2);
+
+    if (staticCanvas) {
+      staticCanvas.width = pixelWidth * 2;
+      staticCanvas.height = pixelHeight * 2;
+    }
+    
+    if (dynamicCanvas) {
+      dynamicCanvas.width = pixelWidth * 2;
+      dynamicCanvas.height = pixelHeight * 2;
+    }
+
+    // Load Images
+    const imagesToLoad = [];
+    for (const key in this.images) {
+      imagesToLoad.push(this.loadImage(this.images[key]));
+    }
+
+    return Promise.all(imagesToLoad).then(() => {
+        this.startGameFromServerData(mapData);
+        requestAnimationFrame(this.loop);
+    });
+  }
+
+  startGameFromServerData(mapData) {
+     this.state = new GameView();
+     this.bot.clearCache();
+     const random = new Random(mapData.mapSeed);
+     
+     // Initialize logic
+     this.logic = new GameLogic(this.state, this.pathfinder, this.bot);
+     
+     // Reconstruct the map from server data
+     this.reconstructMapFromServer(mapData, random);
+     
+     // Generate Visual Backgrounds
+     this.mapRender.renderStaticBackground(this.state, this.images, random);
+     this.mapRender.renderSeaBackground(this.state, this.images, random);
+
+     // Calculate AI Helpers (Profitability)
+     this.calcAIHelpers();
+     
+     // Spawn Units
+     this.initUnits();
+
+     // UI Updates
+     const mapStatus = document.getElementById('mapStatus');
+     if (mapStatus) {
+         mapStatus.innerHTML = `<b>Map</b> ${mapData.mapSeed}, <b>Turn</b> ${this.state.turn + 1}`;
+     }
+     
+     const mapNumberInput = document.getElementById('mapNumberInput');
+     if (mapNumberInput) {
+         mapNumberInput.value = mapData.mapSeed;
+     }
+     
+     const startBtn = document.getElementById('startBattleButton');
+     if (startBtn) startBtn.disabled = false;
+     
+     const topBarStartBtn = document.getElementById('topBarStartBattle');
+     if (topBarStartBtn) topBarStartBtn.disabled = false;
+
+     // Initialize top bar
+     this.initializeTopBar();
+
+     // Initial Draw
+     this.mapRender.drawMap(this.state, this.images);
+  }
+
+  reconstructMapFromServer(mapData, random) {
+     // Reconstruct fields from server data
+     for (const fieldData of mapData.fields) {
+         const field = {
+             fx: fieldData.fx,
+             fy: fieldData.fy,
+             type: fieldData.type,
+             estate: fieldData.estate,
+             party: fieldData.party,
+             capital: fieldData.capital,
+             army: null,
+             neighbours: new Array(6),
+             town_name: fieldData.town_name,
+             profitability: [0, 0, 0, 0],
+             n_capital: [false, false, false, false],
+             n_town: false,
+             land_id: fieldData.land_id,
+         };
+         
+         // Add pixel coordinates
+         field._x = fieldData.fx * (this.state.hexWidth * 0.75) + this.state.hexWidth / 2;
+         field._y = (fieldData.fx % 2 === 0) 
+             ? fieldData.fy * this.state.hexHeight + this.state.hexHeight / 2 
+             : fieldData.fy * this.state.hexHeight + this.state.hexHeight;
+         
+         this.state.setField(fieldData.fx, fieldData.fy, field);
+     }
+     
+     // Link neighbours
+     for (let x = 0; x < this.state.width; x++) {
+         for (let y = 0; y < this.state.height; y++) {
+             const field = this.state.getField(x, y);
+             if (field) {
+                 this.findNeighbours(field);
+             }
+         }
+     }
+     
+     // Reconstruct party capitals
+     for (let i = 0; i < this.state.parties.length; i++) {
+         const partyData = mapData.parties[i];
+         if (partyData.capital) {
+             const capitalField = this.state.getField(partyData.capital.fx, partyData.capital.fy);
+             this.state.parties[i].capital = capitalField;
+         }
+     }
+     
+     // Build towns list
+     this.state.allTowns = [];
+     for (let x = 0; x < this.state.width; x++) {
+         for (let y = 0; y < this.state.height; y++) {
+             const field = this.state.getField(x, y);
+             if (field && (field.estate === "town" || field.estate === "port")) {
+                 this.state.allTowns.push(field);
+             }
+         }
+     }
+  }
+
+  findNeighbours(field) {
+    const x = field.fx;
+    const y = field.fy;
+    const get = (nx, ny) => this.state.getField(nx, ny);
+
+    if (x % 2 === 0) {
+        field.neighbours[0] = get(x + 1, y);
+        field.neighbours[1] = get(x, y + 1);
+        field.neighbours[2] = get(x - 1, y);
+        field.neighbours[3] = get(x - 1, y - 1);
+        field.neighbours[4] = get(x, y - 1);
+        field.neighbours[5] = get(x + 1, y - 1);
+    } else {
+        field.neighbours[0] = get(x + 1, y + 1);
+        field.neighbours[1] = get(x, y + 1);
+        field.neighbours[2] = get(x - 1, y + 1);
+        field.neighbours[3] = get(x - 1, y);
+        field.neighbours[4] = get(x, y - 1);
+        field.neighbours[5] = get(x + 1, y);
+    }
+  }
+
   startNewGame(mapNumber) {
      this.state = new GameView();
      this.bot.clearCache();
@@ -210,6 +374,7 @@ export class Game {
   }
 
   startBattle() {
+    this.battleStarted = true;
     this.state.turn = 0;
     this.state.turnParty = -1;
     this.nextTurn();
@@ -272,6 +437,10 @@ export class Game {
 
     const currentParty = this.state.parties[this.state.turnParty];
     if (currentParty.control === "computer") {
+        if (this.waitingForReady) {
+            console.log('Waiting for all players to be ready, skipping AI turn');
+            return;
+        }
         this.runComputerTurn(currentParty.id);
     } else {
         // Human Turn
@@ -403,6 +572,8 @@ export class Game {
   }
 
   handleMouseMove(event) {
+    if (!this.state) return;
+    
     const canvas = document.getElementById('dynamicCanvas');
     const pos = this.getMousePos(canvas, event);
     this.cursorPos = pos;
@@ -417,6 +588,7 @@ export class Game {
   }
 
   handleInput(event) {
+      if (!this.state) return;
       if (this.state.turnParty !== this.state.humanPlayerId) return;
       if (this.humanMovesLeft <= 0) return;
 
@@ -501,6 +673,8 @@ export class Game {
   }
 
   getMousePos(canvas, event) {
+    if (!this.state) return { x: 0, y: 0 };
+    
     const rect = canvas.getBoundingClientRect();
     return {
       x: (event.clientX - rect.left) * (this.state.pixelWidth / rect.width),
@@ -509,6 +683,8 @@ export class Game {
   }
 
   getFieldXYFromScreenXY(screenX, screenY) {
+    if (!this.state) return null;
+    
     // Ported from Map.js
     const board = this.state; // Use aliases from state
     const hw_fw = board.hexWidth;
@@ -571,6 +747,7 @@ export class Game {
 
       const capitalName = document.createElement('div');
       capitalName.className = 'capital-name';
+      capitalName.id = `capital-name-${i}`;
       capitalName.textContent = party.name;
 
       const capitalStats = document.createElement('div');
@@ -591,6 +768,32 @@ export class Game {
 
     // Update initial stats
     this.updateTopBar();
+  }
+
+  updateMultiplayerPlayers(roomPlayers) {
+    this.multiplayerPlayers = roomPlayers;
+    for (let i = 0; i < this.state.parties.length; i++) {
+      const capitalItem = document.getElementById(`capital-item-${i}`);
+      const capitalName = document.getElementById(`capital-name-${i}`);
+      
+      if (roomPlayers[i]) {
+        if (capitalName) {
+          capitalName.textContent = roomPlayers[i];
+        }
+        if (capitalItem) {
+          capitalItem.style.background = 'rgba(33, 150, 243, 0.2)';
+          capitalItem.style.borderColor = 'rgba(33, 150, 243, 0.5)';
+        }
+      } else {
+        if (capitalName) {
+          capitalName.textContent = this.state.parties[i].name;
+        }
+        if (capitalItem) {
+          capitalItem.style.background = '';
+          capitalItem.style.borderColor = '';
+        }
+      }
+    }
   }
 
   updateTopBar() {

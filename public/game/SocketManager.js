@@ -57,6 +57,11 @@ export class SocketManager {
             }
         });
 
+        this.socket.on('map_data', (data) => {
+            console.log('Map data received:', data);
+            window.dispatchEvent(new CustomEvent('mapDataReceived', { detail: data }));
+        });
+
         this.socket.on('player_joined', (data) => {
             console.log('Player joined:', data);
             window.dispatchEvent(new CustomEvent('playerJoined', { detail: data }));
@@ -65,6 +70,26 @@ export class SocketManager {
         this.socket.on('player_left', (data) => {
             console.log('Player left:', data);
             window.dispatchEvent(new CustomEvent('playerLeft', { detail: data }));
+        });
+
+        this.socket.on('faction_selected', (data) => {
+            console.log('Faction selected:', data);
+            window.dispatchEvent(new CustomEvent('factionSelected', { detail: data }));
+        });
+
+        this.socket.on('existing_factions', (data) => {
+            console.log('Existing factions received:', data);
+            window.dispatchEvent(new CustomEvent('existingFactions', { detail: data }));
+        });
+
+        this.socket.on('ready_status_update', (data) => {
+            console.log('Ready status update:', data);
+            window.dispatchEvent(new CustomEvent('readyStatusUpdate', { detail: data }));
+        });
+
+        this.socket.on('all_players_ready', () => {
+            console.log('All players ready, starting game');
+            window.dispatchEvent(new CustomEvent('allPlayersReady'));
         });
 
         this.socket.on('disconnect', () => {
@@ -111,5 +136,30 @@ export class SocketManager {
 
     getPlayerName() {
         return this.playerName;
+    }
+
+    selectFaction(roomId, partyId, playerName) {
+        if (!this.connected) {
+            console.error('Not connected to server');
+            return;
+        }
+
+        this.socket.emit('faction_selected', {
+            roomId: roomId,
+            partyId: partyId,
+            playerName: playerName
+        });
+    }
+
+    setReady(roomId, isReady) {
+        if (!this.connected) {
+            console.error('Not connected to server');
+            return;
+        }
+
+        this.socket.emit('player_ready', {
+            roomId: roomId,
+            isReady: isReady
+        });
     }
 }

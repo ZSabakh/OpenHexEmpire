@@ -50,6 +50,9 @@ io.on('connection', (socket) => {
         
         if (result.success) {
             socket.join(roomId);
+            
+            const mapData = gameRoom.getMapData();
+            
             socket.emit('game_created', {
                 success: true,
                 roomId: roomId,
@@ -58,6 +61,8 @@ io.on('connection', (socket) => {
                 playerName: result.playerName,
                 gameState: gameRoom.getGameState()
             });
+
+            socket.emit('map_data', mapData);
 
             console.log(`[Server] Game room ${roomId} created by ${playerName}`);
         } else {
@@ -86,6 +91,9 @@ io.on('connection', (socket) => {
         
         if (result.success) {
             socket.join(roomId);
+            
+            const mapData = gameRoom.getMapData();
+            
             socket.emit('game_joined', {
                 success: true,
                 roomId: roomId,
@@ -93,6 +101,11 @@ io.on('connection', (socket) => {
                 playerName: result.playerName,
                 gameState: gameRoom.getGameState()
             });
+
+            socket.emit('map_data', mapData);
+
+            const factionSelections = gameRoom.getFactionSelections();
+            socket.emit('existing_factions', { factionSelections });
 
             socket.to(roomId).emit('player_joined', {
                 playerName: result.playerName,
@@ -109,14 +122,65 @@ io.on('connection', (socket) => {
         }
     });
 
+    socket.on('faction_selected', (data) => {
+        const roomId = data.roomId;
+        const partyId = data.partyId;
+        const playerName = data.playerName;
+
+        const gameRoom = gameRooms.get(roomId);
+        if (gameRoom) {
+            gameRoom.setFactionSelection(partyId, playerName);
+            
+            const player = gameRoom.players.get(socket.id);
+            if (player) {
+                player.partyId = partyId;
+            }
+        }
+
+        console.log(`[Server] ${playerName} selected faction ${partyId} in room ${roomId}`);
+
+        io.to(roomId).emit('faction_selected', {
+            partyId: partyId,
+            playerName: playerName
+        });
+    });
+
+    socket.on('player_ready', (data) => {
+        const roomId = data.roomId;
+        const isReady = data.isReady;
+
+        const gameRoom = gameRooms.get(roomId);
+        if (gameRoom) {
+            gameRoom.setPlayerReady(socket.id, isReady);
+            
+            const readyCount = gameRoom.getReadyCount();
+            const totalPlayers = gameRoom.getTotalPlayersWithFactions();
+            
+            console.log(`[Server] Ready status updated in room ${roomId}: ${readyCount}/${totalPlayers}`);
+
+            io.to(roomId).emit('ready_status_update', {
+                readyCount: readyCount,
+                totalPlayers: totalPlayers,
+                readyStatus: gameRoom.getReadyStatus()
+            });
+
+            if (gameRoom.areAllPlayersReady()) {
+                console.log(`[Server] All players ready in room ${roomId}, starting game`);
+                gameRoom.startGame();
+                io.to(roomId).emit('all_players_ready');
+            }
+        }
+    });
+
     socket.on('disconnect', () => {
         console.log(`[Server] Client disconnected: ${socket.id}`);
         
         for (const [roomId, gameRoom] of gameRooms.entries()) {
-            if (gameRoom.removePlayer(socket.id)) {
-                // Notify other players
+            const result = gameRoom.removePlayer(socket.id);
+            if (result.removed) {
                 io.to(roomId).emit('player_left', {
-                    playerCount: gameRoom.getPlayerCount()
+                    playerCount: gameRoom.getPlayerCount(),
+                    partyId: result.partyId
                 });
 
                 if (gameRoom.isEmpty()) {

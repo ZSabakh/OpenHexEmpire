@@ -332,6 +332,19 @@
     <div class="section">
       <div class="row">
         <div class="col s12">
+           <!-- Multiplayer Info Bar -->
+           <div id="multiplayerBar" style="display: none; background: rgba(33, 150, 243, 0.1); border: 2px solid rgba(33, 150, 243, 0.3); border-radius: 8px 8px 0 0; padding: 10px 15px; margin-bottom: -2px;">
+             <div style="display: flex; justify-content: center; align-items: center; gap: 15px;">
+               <div class="map-controls-section" style="margin: 0;">
+                 <span style="color: #2196F3; font-weight: bold;">Room:</span>
+                 <span id="roomIdDisplay" style="color: #fff; font-family: monospace;">-</span>
+                 <button type="button" class="map-control-btn" id="copyRoomUrl" title="Copy room URL">
+                   <i class="material-icons" style="font-size: 16px; vertical-align: middle;">link</i>
+                 </button>
+               </div>
+             </div>
+           </div>
+           
            <!-- Game Top Bar -->
            <div id="gameTopBar">
              <div class="top-bar-content">
