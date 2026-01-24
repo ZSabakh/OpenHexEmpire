@@ -9,7 +9,8 @@
     "express": "^5.2.1",
     "http": "^0.0.1-security",
     "materialize-css": "^1.0.0",
-    "serve-static": "^2.2.1"
+    "serve-static": "^2.2.1",
+    "socket.io": "^4.8.3"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",

@@ -1,6 +1,37 @@
-import { Game } from './Game.js'
+import { Game } from './Game.js';
+import { SocketManager } from './SocketManager.js';
 
 $(function(){
+  // Initialize Socket.io connection
+  const socketManager = new SocketManager();
+  
+  socketManager.connect().then((data) => {
+    console.log('Socket connection established');
+    
+    // For testing: automatically create a game room
+    // Soon this would be triggered by user action
+    const testMapSeed = Math.floor(Math.random() * 999999);
+    socketManager.createGame(testMapSeed, 'Player 1');
+  }).catch((error) => {
+    console.error('Failed to connect to server:', error);
+  });
+
+  window.addEventListener('gameCreated', (event) => {
+    console.log('Game created event received:', event.detail);
+  });
+
+  window.addEventListener('gameJoined', (event) => {
+    console.log('Game joined event received:', event.detail);
+  });
+
+  window.addEventListener('playerJoined', (event) => {
+    console.log('Player joined event received:', event.detail);
+  });
+
+  window.addEventListener('playerLeft', (event) => {
+    console.log('Player left event received:', event.detail);
+  });
+
   // Initialize Materialize
   M.AutoInit();
 
