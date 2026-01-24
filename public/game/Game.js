@@ -1,7 +1,7 @@
 import { Config } from '../../shared/Config.js';
 import { Pathfinder } from '../../shared/Pathfinder.js';
 import { Utils, Random } from './Utils.js';
-import { GameState } from './GameState.js';
+import { GameView } from './GameView.js';
 import { MapRender } from './MapRender.js';
 import { MapGenerator } from './MapGenerator.js';
 import { GameLogic } from './GameLogic.js';
@@ -120,7 +120,7 @@ export class Game {
   }
 
   startNewGame(mapNumber) {
-     this.state = new GameState();
+     this.state = new GameView();
      this.bot.clearCache();
      const random = new Random(mapNumber);
      
