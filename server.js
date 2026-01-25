@@ -13,9 +13,98 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const gameRooms = new Map(); 
+const gameRooms = new Map();
 
-// Settings
+
+function handleAITurn(roomId, gameRoom, io) {
+    console.log(`[Server] Handling AI turn for room ${roomId}, party ${gameRoom.gameModel.turnParty}`);
+    
+    
+    gameRoom.gameLogic.syncPartyArmies();
+    gameRoom.bot.clearCache();
+
+    
+    const partyId = gameRoom.gameModel.turnParty;
+    const movePoints = 5; 
+    let moveIndex = 0;
+
+    const executeAIMove = () => {
+        if (moveIndex >= movePoints) {
+            
+            const turnResult = gameRoom.nextTurn();
+            
+            if (turnResult.gameEnded) {
+                io.to(roomId).emit('game_ended', { reason: 'Turn limit reached' });
+            } else {
+                
+                const newPartyId = turnResult.turnParty;
+                const spawnEvents = gameRoom.gameLogic.spawnUnits(newPartyId);
+
+                io.to(roomId).emit('new_turn', {
+                    turn: turnResult.turn,
+                    turnParty: turnResult.turnParty,
+                    partyName: turnResult.partyName,
+                    control: turnResult.control
+                });
+                
+                if (spawnEvents.length > 0) {
+                    io.to(roomId).emit('units_spawned', { events: spawnEvents });
+                }
+                
+                
+                if (turnResult.control === 'computer') {
+                    handleAITurn(roomId, gameRoom, io);
+                }
+            }
+            return;
+        }
+
+        
+        const profitability = gameRoom.bot.calcArmiesProfitability(partyId, gameRoom.gameModel);
+        
+        console.log(`[Server] AI (Party ${partyId}) found ${profitability.length} movable armies`);
+
+        if (profitability.length > 0) {
+            
+            profitability.sort((a, b) => {
+                if (a.profitability > b.profitability) return -1;
+                if (a.profitability < b.profitability) return 1;
+                const aTotal = a.count + a.morale;
+                const bTotal = b.count + b.morale;
+                return bTotal - aTotal;
+            });
+
+            const bestArmy = profitability[0];
+            const move = bestArmy.move;
+            
+            console.log(`[Server] AI executing move for army ${bestArmy.id} from (${bestArmy.field.fx},${bestArmy.field.fy}) to (${move.fx},${move.fy}) with prof ${bestArmy.profitability}`);
+
+            
+            const result = gameRoom.executeMove(bestArmy.field, move);
+            
+            if (result.success) {
+                
+                io.to(roomId).emit('move_executed', {
+                    success: true,
+                    fromField: result.fromField,
+                    toField: result.toField,
+                    armyId: result.armyId,
+                    events: result.events,
+                    playerId: 'AI'
+                });
+            }
+        }
+
+        moveIndex++;
+        setTimeout(executeAIMove, 500); 
+    };
+
+    
+    setTimeout(executeAIMove, 1000);
+}
+
+
+
 app.set('port', process.env.PORT || 3000);
 app.set('views', __dirname + '/views');
 app.set('view engine', 'ejs');
@@ -168,6 +257,119 @@ io.on('connection', (socket) => {
                 console.log(`[Server] All players ready in room ${roomId}, starting game`);
                 gameRoom.startGame();
                 io.to(roomId).emit('all_players_ready');
+                
+                
+                const turnResult = gameRoom.nextTurn();
+                
+                
+                const spawnEvents = gameRoom.gameLogic.spawnUnits(turnResult.turnParty);
+
+                if (!turnResult.gameEnded) {
+                    io.to(roomId).emit('new_turn', {
+                        turn: turnResult.turn,
+                        turnParty: turnResult.turnParty,
+                        partyName: turnResult.partyName,
+                        control: turnResult.control
+                    });
+                    
+                    if (spawnEvents.length > 0) {
+                        io.to(roomId).emit('units_spawned', { events: spawnEvents });
+                    }
+                    
+                    
+                    if (turnResult.control === 'computer') {
+                        handleAITurn(roomId, gameRoom, io);
+                    }
+                }
+            }
+        }
+    });
+
+    socket.on('move_unit', (data) => {
+        const roomId = data.roomId;
+        const moveData = data.moveData;
+
+        const gameRoom = gameRooms.get(roomId);
+        if (!gameRoom) {
+            socket.emit('move_error', { error: 'Game room not found' });
+            return;
+        }
+
+        
+        const validation = gameRoom.validateMove(socket.id, moveData);
+        if (!validation.valid) {
+            socket.emit('move_error', { error: validation.error });
+            console.log(`[Server] Move rejected for ${socket.id} in room ${roomId}: ${validation.error}`);
+            return;
+        }
+
+        
+        const result = gameRoom.executeMove(validation.fromField, validation.toField);
+        
+        if (!result.success) {
+            socket.emit('move_error', { error: result.error });
+            return;
+        }
+
+        console.log(`[Server] Move executed from ${socket.id} in room ${roomId}`);
+        
+        
+        io.to(roomId).emit('move_executed', {
+            success: true,
+            fromField: result.fromField,
+            toField: result.toField,
+            armyId: result.armyId,
+            events: result.events,
+            playerId: socket.id
+        });
+    });
+
+    socket.on('end_turn', (data) => {
+        const roomId = data.roomId;
+
+        const gameRoom = gameRooms.get(roomId);
+        if (!gameRoom) {
+            socket.emit('turn_error', { error: 'Game room not found' });
+            return;
+        }
+
+        const player = gameRoom.players.get(socket.id);
+        if (!player) {
+            socket.emit('turn_error', { error: 'Player not found' });
+            return;
+        }
+
+        if (gameRoom.gameModel.turnParty !== player.partyId) {
+            socket.emit('turn_error', { error: 'Not your turn' });
+            return;
+        }
+
+        console.log(`[Server] Player ${player.name} ended their turn in room ${roomId}`);
+
+        
+        const turnResult = gameRoom.nextTurn();
+        
+        if (turnResult.gameEnded) {
+            io.to(roomId).emit('game_ended', { reason: 'Turn limit reached' });
+        } else {
+            
+            const newPartyId = turnResult.turnParty;
+            const spawnEvents = gameRoom.gameLogic.spawnUnits(newPartyId);
+
+            io.to(roomId).emit('new_turn', {
+                turn: turnResult.turn,
+                turnParty: turnResult.turnParty,
+                partyName: turnResult.partyName,
+                control: turnResult.control
+            });
+
+            if (spawnEvents.length > 0) {
+                io.to(roomId).emit('units_spawned', { events: spawnEvents });
+            }
+            
+            
+            if (turnResult.control === 'computer') {
+                handleAITurn(roomId, gameRoom, io);
             }
         }
     });

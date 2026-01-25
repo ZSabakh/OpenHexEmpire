@@ -92,6 +92,36 @@ export class SocketManager {
             window.dispatchEvent(new CustomEvent('allPlayersReady'));
         });
 
+        this.socket.on('new_turn', (data) => {
+            console.log('New turn:', data);
+            window.dispatchEvent(new CustomEvent('newTurn', { detail: data }));
+        });
+
+        this.socket.on('move_executed', (data) => {
+            console.log('Move executed:', data);
+            window.dispatchEvent(new CustomEvent('moveExecuted', { detail: data }));
+        });
+
+        this.socket.on('move_error', (data) => {
+            console.error('Move error:', data.error);
+            window.dispatchEvent(new CustomEvent('moveError', { detail: data }));
+        });
+
+        this.socket.on('turn_error', (data) => {
+            console.error('Turn error:', data.error);
+            window.dispatchEvent(new CustomEvent('turnError', { detail: data }));
+        });
+
+        this.socket.on('game_ended', (data) => {
+            console.log('Game ended:', data);
+            window.dispatchEvent(new CustomEvent('gameEnded', { detail: data }));
+        });
+
+        this.socket.on('units_spawned', (data) => {
+            console.log('Units spawned:', data);
+            window.dispatchEvent(new CustomEvent('unitsSpawned', { detail: data }));
+        });
+
         this.socket.on('disconnect', () => {
             console.log('Disconnected from server');
             this.connected = false;
@@ -160,6 +190,29 @@ export class SocketManager {
         this.socket.emit('player_ready', {
             roomId: roomId,
             isReady: isReady
+        });
+    }
+
+    moveUnit(roomId, moveData) {
+        if (!this.connected) {
+            console.error('Not connected to server');
+            return;
+        }
+
+        this.socket.emit('move_unit', {
+            roomId: roomId,
+            moveData: moveData
+        });
+    }
+
+    endTurn(roomId) {
+        if (!this.connected) {
+            console.error('Not connected to server');
+            return;
+        }
+
+        this.socket.emit('end_turn', {
+            roomId: roomId
         });
     }
 }

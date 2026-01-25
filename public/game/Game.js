@@ -6,8 +6,10 @@ import { MapRender } from './MapRender.js';
 import { MapGeneratorClient } from './MapGeneratorClient.js';
 import { GameLogic } from './GameLogic.js';
 import { Bot } from './Bot.js';
+import { Animations } from './Animations.js';
 
 export class Game {
+
   constructor() {
     this.mapRender = new MapRender();
     this.pathfinder = new Pathfinder();
@@ -22,8 +24,11 @@ export class Game {
     this.totalMovesForTurn = 0;
     this.battleStarted = false;
     this.waitingForReady = false;
+    this.isMultiplayer = false;
+    this.socketManager = null;
+    this.roomId = null;
     
-    // Animation Loop
+    
     this.lastTime = 0;
     this.loop = this.loop.bind(this);
   }
@@ -42,7 +47,7 @@ export class Game {
     const images = {};
     const cfg = Config.IMAGES;
     
-    // Backgrounds
+    
     for (let i = 1; i <= cfg.GRASS_BG.count; i++) {
       images["grassBg" + i] = { img: null, path: Utils.getImagePath(cfg.GRASS_BG.prefix + i + '.png'), status: 'none' };
     }
@@ -50,20 +55,20 @@ export class Game {
       images["seaBg" + i] = { img: null, path: Utils.getImagePath(cfg.SEA_BG.prefix + i + '.png'), status: 'none' };
     }
     for (let i = 1; i <= cfg.TOWN_BG_GRASS.count; i++) {
-       // Note: original code used c_1..c_6. Config has prefix c_
+       
        images["townBgGrass" + i] = { img: null, path: Utils.getImagePath(cfg.TOWN_BG_GRASS.prefix + i + '.png'), status: 'none' };
     }
     
-    // Estates
+    
     images["city"] = { img: null, path: Utils.getImagePath(cfg.CITY), status: 'none' };
     images["port"] = { img: null, path: Utils.getImagePath(cfg.PORT), status: 'none' };
     
-    // Capitals
+    
     cfg.CAPITALS.forEach((path, idx) => {
         images["capital" + idx] = { img: null, path: Utils.getImagePath(path), status: 'none' };
     });
     
-    // Units
+    
     for (const [key, path] of Object.entries(cfg.UNITS)) {
         images[key] = { img: null, path: Utils.getImagePath(path), status: 'none' };
     }
@@ -88,7 +93,7 @@ export class Game {
   generateNewMap(mapNumber) {
     this.mapNumber = mapNumber;
     
-    // Resize both canvases
+    
     const staticCanvas = document.getElementById('staticCanvas');
     const dynamicCanvas = document.getElementById('dynamicCanvas');
     
@@ -109,7 +114,7 @@ export class Game {
       dynamicCanvas.height = pixelHeight * 2;
     }
 
-    // Load Images
+    
     const imagesToLoad = [];
     for (const key in this.images) {
       imagesToLoad.push(this.loadImage(this.images[key]));
@@ -124,7 +129,7 @@ export class Game {
   loadServerMap(mapData) {
     this.mapNumber = mapData.mapSeed;
     
-    // Resize both canvases
+    
     const staticCanvas = document.getElementById('staticCanvas');
     const dynamicCanvas = document.getElementById('dynamicCanvas');
     
@@ -145,7 +150,7 @@ export class Game {
       dynamicCanvas.height = pixelHeight * 2;
     }
 
-    // Load Images
+    
     const imagesToLoad = [];
     for (const key in this.images) {
       imagesToLoad.push(this.loadImage(this.images[key]));
@@ -162,23 +167,23 @@ export class Game {
      this.bot.clearCache();
      const random = new Random(mapData.mapSeed);
      
-     // Initialize logic
+     
      this.logic = new GameLogic(this.state, this.pathfinder, this.bot);
      
-     // Reconstruct the map from server data
+     
      this.reconstructMapFromServer(mapData, random);
      
-     // Generate Visual Backgrounds
+     
      this.mapRender.renderStaticBackground(this.state, this.images, random);
      this.mapRender.renderSeaBackground(this.state, this.images, random);
 
-     // Calculate AI Helpers (Profitability)
+     
      this.calcAIHelpers();
      
-     // Spawn Units
+     
      this.initUnits();
 
-     // UI Updates
+     
      const mapStatus = document.getElementById('mapStatus');
      if (mapStatus) {
          mapStatus.innerHTML = `<b>Map</b> ${mapData.mapSeed}, <b>Turn</b> ${this.state.turn + 1}`;
@@ -195,15 +200,15 @@ export class Game {
      const topBarStartBtn = document.getElementById('topBarStartBattle');
      if (topBarStartBtn) topBarStartBtn.disabled = false;
 
-     // Initialize top bar
+     
      this.initializeTopBar();
 
-     // Initial Draw
+     
      this.mapRender.drawMap(this.state, this.images);
   }
 
   reconstructMapFromServer(mapData, random) {
-     // Reconstruct fields from server data
+     
      for (const fieldData of mapData.fields) {
          const field = {
              fx: fieldData.fx,
@@ -221,7 +226,7 @@ export class Game {
              land_id: fieldData.land_id,
          };
          
-         // Add pixel coordinates
+         
          field._x = fieldData.fx * (this.state.hexWidth * 0.75) + this.state.hexWidth / 2;
          field._y = (fieldData.fx % 2 === 0) 
              ? fieldData.fy * this.state.hexHeight + this.state.hexHeight / 2 
@@ -230,7 +235,7 @@ export class Game {
          this.state.setField(fieldData.fx, fieldData.fy, field);
      }
      
-     // Link neighbours
+     
      for (let x = 0; x < this.state.width; x++) {
          for (let y = 0; y < this.state.height; y++) {
              const field = this.state.getField(x, y);
@@ -240,7 +245,7 @@ export class Game {
          }
      }
      
-     // Reconstruct party capitals
+     
      for (let i = 0; i < this.state.parties.length; i++) {
          const partyData = mapData.parties[i];
          if (partyData.capital) {
@@ -249,7 +254,7 @@ export class Game {
          }
      }
      
-     // Build towns list
+     
      this.state.allTowns = [];
      for (let x = 0; x < this.state.width; x++) {
          for (let y = 0; y < this.state.height; y++) {
@@ -288,24 +293,24 @@ export class Game {
      this.bot.clearCache();
      const random = new Random(mapNumber);
      
-     // Generators & Logic
+     
      this.mapGenerator = new MapGeneratorClient(this.state, random, this.pathfinder);
      this.logic = new GameLogic(this.state, this.pathfinder, this.bot);
 
-     // Generate Logic Map
+     
      this.mapGenerator.generate();
      
-     // Generate Visual Backgrounds
+     
      this.mapRender.renderStaticBackground(this.state, this.images, random);
      this.mapRender.renderSeaBackground(this.state, this.images, random);
 
-     // Calculate AI Helpers (Profitability)
+     
      this.calcAIHelpers();
      
-     // Spawn Units
+     
      this.initUnits();
 
-     // UI Updates
+     
      const mapStatus = document.getElementById('mapStatus');
      if (mapStatus) {
          mapStatus.innerHTML = `<b>Map</b> ${mapNumber}, <b>Turn</b> ${this.state.turn + 1}`;
@@ -322,33 +327,33 @@ export class Game {
      const topBarStartBtn = document.getElementById('topBarStartBattle');
      if (topBarStartBtn) topBarStartBtn.disabled = false;
 
-     // Initialize top bar
+     
      this.initializeTopBar();
 
-     // Initial Draw
+     
      this.mapRender.drawMap(this.state, this.images);
   }
   
   calcAIHelpers() {
-      // Logic from Map.js calcAIHelpers
-      // Pre-calculate distance/profitability for AI
-      // This modifies field.profitability
+      
+      
+      
       for (let p = 0; p < this.state.parties.length; p++) {
           const capital = this.state.parties[p].capital;
           for (let x = 0; x < this.state.width; x++) {
               for (let y = 0; y < this.state.height; y++) {
                   const field = this.state.getField(x, y);
-                  // Only calc if land or port?
-                  // Original: findPath from field to capital
+                  
+                  
                   const path = this.pathfinder.findPath(field, capital, [], true);
                   if (!path) {
                       continue;
                   }
                   field.profitability[p] = -path.length;
                   
-                  // Neighbours info
+                  
                   const neighbours = this.pathfinder.getFurtherNeighbours(field);
-                  // Original added field itself too? "neighbours.push(field)"
+                  
                   const checkList = [...neighbours, field];
                   
                   for (const n of checkList) {
@@ -364,7 +369,7 @@ export class Game {
   initUnits() {
       for (const party of this.state.parties) {
           this.logic.unitsSpawn(party.id);
-          this.logic.updateBoard(); // Initial update
+          this.logic.updateBoard(); 
       }
   }
 
@@ -396,24 +401,24 @@ export class Game {
     this.updateMapStatus();
     this.updateTopBar();
 
-    // Check game end conditions for human player
+    
     if (this.state.humanPlayerId >= 0 && !this.state.isSpectating) {
       const humanParty = this.state.parties[this.state.humanPlayerId];
       
-      // Check defeat
+      
       if (humanParty.status === 0) {
         this.showGameEndModal('defeat');
         return;
       }
       
-      // Check victory
+      
       if (humanParty.provincesCp && humanParty.provincesCp.length === this.state.parties.length - 1) {
         this.showGameEndModal('victory');
         return;
       }
     }
 
-    // Check Global Game End (Spectator Mode or AI vs AI)
+    
     if (this.state.isSpectating) {
         let activeParties = [];
         for(const p of this.state.parties) {
@@ -426,7 +431,7 @@ export class Game {
         }
     }
 
-    // Skip eliminated parties
+    
     if (this.state.parties[this.state.turnParty].status === 0) {
         this.nextTurn();
         return;
@@ -443,7 +448,7 @@ export class Game {
         }
         this.runComputerTurn(currentParty.id);
     } else {
-        // Human Turn
+        
         this.totalMovesForTurn = this.getMovePoints(currentParty.id);
         this.humanMovesLeft = this.totalMovesForTurn;
         this.updateMapStatus();
@@ -498,10 +503,10 @@ export class Game {
   }
 
   runComputerTurn(partyId) {
-     // Clear AI cache at the start of the turn so it reacts to the new board state
+     
      this.bot.clearCache();
 
-     // Duel logic check
+     
      let surviving = 0;
      for (const p of this.state.parties) {
          if (p.capital.party === p.id) surviving++;
@@ -537,9 +542,9 @@ export class Game {
 
         moveIndex++;
         if (animating) {
-            setTimeout(executeMove, Config.ANIMATION.MOVE_WAIT); // Check again slightly after expected duration
+            setTimeout(executeMove, Config.ANIMATION.MOVE_WAIT); 
         } else {
-            setTimeout(executeMove, Config.ANIMATION.MOVE_WAIT_MIN); // Minimal delay
+            setTimeout(executeMove, Config.ANIMATION.MOVE_WAIT_MIN); 
         }
      };
 
@@ -600,43 +605,57 @@ export class Game {
       const field = this.state.getField(fieldXY.fx, fieldXY.fy);
       if (!field) return;
 
-      // 1. Move Selection
+      
       if (this.selectedArmy && this.selectedArmy.party === this.state.humanPlayerId) {
           const possibleMoves = this.pathfinder.getPossibleMoves(this.selectedArmy.field, true, false);
           if (possibleMoves.includes(field)) {
-              // Execute Move
-              const success = this.logic.moveArmy(this.selectedArmy, field);
-              
-              if (success) {
-                  this.humanMovesLeft--;
+              if (this.isMultiplayer && this.socketManager) {
+                  
+                  const moveData = {
+                      armyId: this.selectedArmy.id,
+                      fromField: { fx: this.selectedArmy.field.fx, fy: this.selectedArmy.field.fy },
+                      toField: { fx: field.fx, fy: field.fy }
+                  };
+                  this.socketManager.moveUnit(this.roomId, moveData);
+                  
                   this.selectedArmy = null;
-                  this.updateMapStatus();
-                  this.updateTopBar();
-                  this.logic.updateBoard();
                   this.drawGame();
-                  
-                  // Check for immediate victory after move
-                  if (this.state.humanPlayerId >= 0) {
-                    const humanParty = this.state.parties[this.state.humanPlayerId];
-                    if (humanParty.provincesCp && humanParty.provincesCp.length === this.state.parties.length - 1) {
-                      // Hide end turn button before showing victory
-                      const topBarEndTurn = document.getElementById('topBarEndTurn');
-                      if (topBarEndTurn) topBarEndTurn.style.display = 'none';
-                      
-                      this.showGameEndModal('victory');
-                      return;
-                    }
-                  }
-                  
-                  if (this.humanMovesLeft <= 0 || !this.checkHumanCanMove()) {
-                      this.endHumanTurn();
-                  }
                   return;
+              } else {
+                  
+                  const success = this.logic.moveArmy(this.selectedArmy, field);
+                  
+                  if (success) {
+                      this.humanMovesLeft--;
+                      this.selectedArmy = null;
+                      this.updateMapStatus();
+                      this.updateTopBar();
+                      this.logic.updateBoard();
+                      this.drawGame();
+                      
+                      
+                      if (this.state.humanPlayerId >= 0) {
+                        const humanParty = this.state.parties[this.state.humanPlayerId];
+                        if (humanParty.provincesCp && humanParty.provincesCp.length === this.state.parties.length - 1) {
+                          
+                          const topBarEndTurn = document.getElementById('topBarEndTurn');
+                          if (topBarEndTurn) topBarEndTurn.style.display = 'none';
+                          
+                          this.showGameEndModal('victory');
+                          return;
+                        }
+                      }
+                      
+                      if (this.humanMovesLeft <= 0 || !this.checkHumanCanMove()) {
+                          this.endHumanTurn();
+                      }
+                      return;
+                  }
               }
           }
       }
 
-      // 2. Select Army
+      
       if (field.army && field.army.party === this.state.humanPlayerId) {
           if (field.army.moved) return;
 
@@ -649,11 +668,286 @@ export class Game {
           return;
       }
 
-      // 3. Deselect
+      
       if (this.selectedArmy) {
           this.selectedArmy = null;
           this.drawGame();
       }
+  }
+
+  handleMoveExecuted(moveData) {
+      
+      const fromField = this.state.getField(moveData.fromField.fx, moveData.fromField.fy);
+      const toField = this.state.getField(moveData.toField.fx, moveData.toField.fy);
+      
+      if (!fromField || !toField) {
+          console.error('Invalid move data received from server');
+          return;
+      }
+
+      
+      const army = fromField.army;
+      if (army) {
+          
+          let combatOccurred = false;
+          if (moveData.events) {
+              for (const event of moveData.events) {
+                  this.applyServerEvent(event);
+                  if (event.type === 'combat') combatOccurred = true;
+              }
+          }
+
+          
+          if (combatOccurred) {
+              if (typeof gsap !== 'undefined') {
+                  gsap.delayedCall(0.8, () => {
+                      Animations.animateMove(army, toField._x, toField._y);
+                  });
+              } else {
+                  Animations.animateMove(army, toField._x, toField._y);
+              }
+          } else {
+              Animations.animateMove(army, toField._x, toField._y);
+          }
+
+          fromField.army = null;
+          army.field = toField;
+          toField.army = army;
+          army.moved = true;
+      }
+      
+      
+      if (this.isMultiplayer && this.state.turnParty === this.state.humanPlayerId) {
+          this.humanMovesLeft--;
+          
+          if (this.humanMovesLeft <= 0 || !this.checkHumanCanMove()) {
+              this.socketManager.endTurn(this.roomId);
+          }
+      }
+      
+      this.updateMapStatus();
+      this.updateTopBar();
+      this.drawGame();
+  }
+
+  handleUnitsSpawned(data) {
+      if (!data.events) return;
+      
+      for (const event of data.events) {
+          const field = this.state.getField(event.field.fx, event.field.fy);
+          if (!field) continue;
+          
+          if (event.isNew) {
+              
+              const army = {
+                  id: event.armyId,
+                  field: field,
+                  party: event.party,
+                  count: event.newCount,
+                  morale: event.newMorale,
+                  moved: false,
+                  remove: false,
+                  remove_time: -1,
+                  visual: { x: field._x, y: field._y }
+              };
+              
+              field.army = army;
+              this.state.armies[army.id] = army;
+          } else {
+              
+              let army = field.army;
+              
+              if (army && army.id !== event.armyId) {
+                  
+                  delete this.state.armies[army.id];
+                  army.id = event.armyId;
+                  this.state.armies[army.id] = army;
+              }
+              
+              if (!army) {
+                  
+                  army = {
+                      id: event.armyId,
+                      field: field,
+                      party: event.party,
+                      count: event.newCount,
+                      morale: event.newMorale,
+                      moved: false,
+                      remove: false,
+                      remove_time: -1,
+                      visual: { x: field._x, y: field._y }
+                  };
+                  field.army = army;
+                  this.state.armies[army.id] = army;
+              } else {
+                  army.count = event.newCount;
+                  army.morale = event.newMorale;
+              }
+          }
+      }
+      this.drawGame();
+  }
+
+  applyServerEvent(event) {
+      
+      if (event.type === 'combat') {
+          
+          const winner = this.findArmyById(event.winner);
+          const loser = this.findArmyById(event.loser);
+          
+          const attacker = this.findArmyById(event.attacker.id);
+          const defender = this.findArmyById(event.defender.id);
+
+          if (attacker && defender) {
+              Animations.animateAttack(attacker, defender);
+          }
+          
+          if (winner && event.attacker && event.attacker.id === event.winner) {
+              winner.count = event.attacker.finalCount;
+              winner.morale = event.attacker.finalMorale;
+          } else if (winner && event.defender && event.defender.id === event.winner) {
+              winner.count = event.defender.finalCount;
+              winner.morale = event.defender.finalMorale;
+          }
+          
+          if (loser) {
+              Animations.animateExplosion(loser);
+              loser.remove = true;
+              loser.remove_time = 36;
+          }
+      } else if (event.type === 'join') {
+          
+          const targetArmy = this.findArmyById(event.targetArmy.id);
+          const movingArmy = this.findArmyById(event.movingArmy.id);
+          
+          if (movingArmy && targetArmy) {
+              Animations.animateMerge(movingArmy, targetArmy);
+          }
+
+          if (targetArmy) {
+              targetArmy.count = event.targetArmy.finalCount;
+              targetArmy.morale = event.targetArmy.finalMorale;
+          }
+          
+          if (movingArmy) {
+              movingArmy.remove = true;
+              movingArmy.remove_time = 24;
+          }
+      } else if (event.type === 'annex') {
+          
+          const field = this.state.getField(event.field.fx, event.field.fy);
+          if (field) {
+              field.party = event.newParty;
+          }
+      } else if (event.type === 'morale_update') {
+          
+          if (event.updates) {
+              for (const update of event.updates) {
+                  const army = this.findArmyById(update.id);
+                  if (army) {
+                      army.morale = update.morale;
+                  }
+              }
+          }
+      }
+  }
+
+  findArmyById(armyId) {
+      return this.state.armies[armyId];
+  }
+
+  handleNewTurn(turnData) {
+      
+      this.state.turn = turnData.turn;
+      this.state.turnParty = turnData.turnParty;
+      
+      console.log(`New turn: ${turnData.turn + 1}, Party: ${turnData.partyName}, Control: ${turnData.control}`);
+      
+      this.updateMapStatus();
+      this.updateTopBar();
+
+      
+      if (this.state.parties[this.state.turnParty].status === 0) {
+          return;
+      }
+
+      this.logic.cleanupTurn();
+      this.logic.updateBoard();
+
+      const currentParty = this.state.parties[this.state.turnParty];
+      
+      
+      if (this.isMultiplayer) {
+          
+          if (currentParty.control === "human" && this.state.turnParty === this.state.humanPlayerId) {
+              
+              this.totalMovesForTurn = this.getMovePoints(currentParty.id);
+              this.humanMovesLeft = this.totalMovesForTurn;
+              this.updateMapStatus();
+              this.updateTopBar();
+
+              if (this.humanMovesLeft <= 0 || !this.checkHumanCanMove()) {
+                  this.socketManager.endTurn(this.roomId);
+                  return;
+              }
+              
+              const endBtn = document.getElementById('endTurnButton');
+              if (endBtn) {
+                  endBtn.style.display = 'inline-block';
+                  endBtn.onclick = () => this.socketManager.endTurn(this.roomId);
+              }
+              
+              const topBarEndBtn = document.getElementById('topBarEndTurn');
+              if (topBarEndBtn) {
+                  topBarEndBtn.style.display = 'inline-block';
+                  topBarEndBtn.onclick = () => this.socketManager.endTurn(this.roomId);
+              }
+          } else {
+              
+              const endBtn = document.getElementById('endTurnButton');
+              if (endBtn) endBtn.style.display = 'none';
+              
+              const topBarEndBtn = document.getElementById('topBarEndTurn');
+              if (topBarEndBtn) topBarEndBtn.style.display = 'none';
+              
+              console.log(`Waiting for ${turnData.partyName} (${turnData.control}) to play`);
+          }
+      } else {
+          
+          if (currentParty.control === "computer") {
+              this.runComputerTurn(currentParty.id);
+          } else {
+              
+              this.totalMovesForTurn = this.getMovePoints(currentParty.id);
+              this.humanMovesLeft = this.totalMovesForTurn;
+              this.updateMapStatus();
+              this.updateTopBar();
+
+              if (this.humanMovesLeft <= 0 || !this.checkHumanCanMove()) {
+                  this.endHumanTurn();
+                  return;
+              }
+              
+              const endBtn = document.getElementById('endTurnButton');
+              if (endBtn) {
+                  endBtn.style.display = 'inline-block';
+                  endBtn.onclick = () => this.endHumanTurn();
+              }
+              
+              const topBarEndBtn = document.getElementById('topBarEndTurn');
+              if (topBarEndBtn) {
+                  topBarEndBtn.style.display = 'inline-block';
+                  topBarEndBtn.onclick = () => this.endHumanTurn();
+              }
+          }
+      }
+  }
+
+  setMultiplayerMode(socketManager, roomId) {
+      this.isMultiplayer = true;
+      this.socketManager = socketManager;
+      this.roomId = roomId;
+      console.log('Game set to multiplayer mode');
   }
 
 
@@ -664,7 +958,7 @@ export class Game {
           if (el) el.disabled = false;
       });
       
-      // Show the Start Battle button again
+      
       const topBarStartBattle = document.getElementById('topBarStartBattle');
       if (topBarStartBattle) {
           topBarStartBattle.style.display = 'inline-block';
@@ -685,8 +979,8 @@ export class Game {
   getFieldXYFromScreenXY(screenX, screenY) {
     if (!this.state) return null;
     
-    // Ported from Map.js
-    const board = this.state; // Use aliases from state
+    
+    const board = this.state; 
     const hw_fw = board.hexWidth;
     const hw_fh = board.hexHeight;
     const hw_xmax = board.width;
@@ -727,10 +1021,10 @@ export class Game {
     const capitalsSection = document.getElementById('capitalsSection');
     if (!capitalsSection) return;
 
-    // Clear existing content
+    
     capitalsSection.innerHTML = '';
 
-    // Create capital items for each party
+    
     for (let i = 0; i < this.state.parties.length; i++) {
       const party = this.state.parties[i];
       const capitalItem = document.createElement('div');
@@ -762,11 +1056,11 @@ export class Game {
       capitalsSection.appendChild(capitalItem);
     }
 
-    // Show the top bar
+    
     const topBar = document.getElementById('gameTopBar');
     if (topBar) topBar.classList.add('active');
 
-    // Update initial stats
+    
     this.updateTopBar();
   }
 
@@ -799,13 +1093,13 @@ export class Game {
   updateTopBar() {
     if (!this.state) return;
 
-    // Update turn indicator
+    
     const turnIndicator = document.getElementById('turnIndicator');
     if (turnIndicator) {
       turnIndicator.textContent = `Turn ${this.state.turn + 1}`;
     }
 
-    // Update each capital item
+    
     for (let i = 0; i < this.state.parties.length; i++) {
       const party = this.state.parties[i];
       const capitalItem = document.getElementById(`capital-item-${i}`);
@@ -813,19 +1107,19 @@ export class Game {
 
       if (!capitalItem || !capitalStats) continue;
 
-      // Update stats
+      
       const armyCount = party.armies.length;
       const totalPower = party.totalPower || 0;
       capitalStats.textContent = `Armies: ${armyCount} | Power: ${totalPower}`;
 
-      // Update active state
+      
       if (this.state.turnParty === i && party.status === 1) {
         capitalItem.classList.add('active');
       } else {
         capitalItem.classList.remove('active');
       }
 
-      // Update eliminated state
+      
       if (party.status === 0) {
         capitalItem.classList.add('eliminated');
       } else {
@@ -833,7 +1127,7 @@ export class Game {
       }
     }
 
-    // Update button visibility
+    
     const topBarEndTurn = document.getElementById('topBarEndTurn');
     const endTurnButton = document.getElementById('endTurnButton');
     const moveCounter = document.getElementById('moveCounter');
@@ -893,16 +1187,29 @@ export class Game {
       title.style.color = '#ff5252';
       message.textContent = 'Your empire has been defeated. What would you like to do?';
       
-      buttonsContainer.innerHTML = `
-        <button type="button" class="game-control-btn start-battle" id="restartSameMapButton" style="width: 100%; padding: 15px;">
-          <i class="material-icons" style="vertical-align: middle; margin-right: 8px;">refresh</i>
-          Restart with Same Map
-        </button>
-        <button type="button" class="game-control-btn" id="spectateButton" style="width: 100%; padding: 15px; background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%);">
-          <i class="material-icons" style="vertical-align: middle; margin-right: 8px;">visibility</i>
-          Watch AI Battle Continue
-        </button>
-      `;
+      if (this.isMultiplayer) {
+          buttonsContainer.innerHTML = `
+            <button type="button" class="game-control-btn" id="spectateButton" style="width: 100%; padding: 15px; background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%);">
+              <i class="material-icons" style="vertical-align: middle; margin-right: 8px;">visibility</i>
+              Spectate Game
+            </button>
+            <button type="button" class="game-control-btn" id="leaveGameButton" style="width: 100%; padding: 15px; margin-top: 10px; background-color: #757575;">
+              <i class="material-icons" style="vertical-align: middle; margin-right: 8px;">exit_to_app</i>
+              Leave Game
+            </button>
+          `;
+      } else {
+          buttonsContainer.innerHTML = `
+            <button type="button" class="game-control-btn start-battle" id="restartSameMapButton" style="width: 100%; padding: 15px;">
+              <i class="material-icons" style="vertical-align: middle; margin-right: 8px;">refresh</i>
+              Restart with Same Map
+            </button>
+            <button type="button" class="game-control-btn" id="spectateButton" style="width: 100%; padding: 15px; background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%);">
+              <i class="material-icons" style="vertical-align: middle; margin-right: 8px;">visibility</i>
+              Watch AI Battle Continue
+            </button>
+          `;
+      }
     }
 
     const modalInstance = M.Modal.init(modal, {
@@ -910,7 +1217,7 @@ export class Game {
     });
     modalInstance.open();
 
-    // Wire up button handlers
+    
     this.setupGameEndButtons(type);
   }
 
@@ -935,6 +1242,11 @@ export class Game {
       if (spectateButton) {
         spectateButton.onclick = () => this.enterSpectatorMode();
       }
+      
+      const leaveButton = document.getElementById('leaveGameButton');
+      if (leaveButton) {
+        leaveButton.onclick = () => window.location.reload();
+      }
     }
   }
 
@@ -944,10 +1256,10 @@ export class Game {
       this.state.isSpectating = false;
     }
     
-    // Re-enable menu controls
+    
     this.enableMenuControls();
     
-    // Regenerate the same map
+    
     this.generateNewMap(this.mapNumber);
   }
 
@@ -957,10 +1269,10 @@ export class Game {
       this.state.isSpectating = false;
     }
     
-    // Re-enable menu controls
+    
     this.enableMenuControls();
     
-    // Generate new map
+    
     this.generateRandomMap();
   }
 

@@ -104,7 +104,7 @@ $(function(){
     });
   };
 
-  // Initialize Materialize
+  
   M.AutoInit();
 
   const dynamicCanvas = document.getElementById('dynamicCanvas');
@@ -143,7 +143,7 @@ $(function(){
     countrySelectGrid.appendChild(capitalItem);
   });
 
-  // Update faction indicators when modal opens
+  
   modalInstance.options.onOpenStart = () => {
     factionNames.forEach((_, index) => {
       const statsEl = document.getElementById(`faction-${index}-player`);
@@ -202,7 +202,7 @@ $(function(){
   $('.country-select').click(function() {
     var country = $(this).data('country');
     
-    // In multiplayer, check if faction is already taken
+    
     if (isMultiplayer && roomPlayers[country]) {
       M.toast({html: factionNames[country] + ' is already taken!', classes: 'orange'});
       return;
@@ -252,7 +252,46 @@ $(function(){
     hideReadyButton();
     game.waitingForReady = false;
     game.battleStarted = true;
-    game.startBattle();
+    
+    
+    const currentRoomId = socketManager.getRoomId();
+    game.setMultiplayerMode(socketManager, currentRoomId);
+    
+    
+  });
+
+  window.addEventListener('newTurn', (e) => {
+    const turnData = e.detail;
+    console.log('New turn event received:', turnData);
+    game.handleNewTurn(turnData);
+  });
+
+  window.addEventListener('moveExecuted', (e) => {
+    const moveData = e.detail;
+    console.log('Move executed event received:', moveData);
+    game.handleMoveExecuted(moveData);
+  });
+
+  window.addEventListener('unitsSpawned', (e) => {
+    const data = e.detail;
+    console.log('Units spawned event received:', data);
+    game.handleUnitsSpawned(data);
+  });
+
+
+  window.addEventListener('moveError', (e) => {
+    const { error } = e.detail;
+    M.toast({html: `Move error: ${error}`, classes: 'red'});
+  });
+
+  window.addEventListener('turnError', (e) => {
+    const { error } = e.detail;
+    M.toast({html: `Turn error: ${error}`, classes: 'red'});
+  });
+
+  window.addEventListener('gameEnded', (e) => {
+    const { reason } = e.detail;
+    M.toast({html: `Game ended: ${reason}`, classes: 'orange'});
   });
 
   function showReadyButton() {
