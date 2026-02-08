@@ -72,7 +72,7 @@ export class GameRules {
     
     static calculateMoraleLost(partyId, field) {
         if (field.capital !== undefined && field.capital >= 0) {
-             return -30;
+             return -20;
         }
         if (field.estate === "town") return -10;
         if (field.estate === "port") return -5;
@@ -99,7 +99,17 @@ export class GameRules {
 
         for (const army of armyList) {
              if (army.party === partyId && !army.remove) {
-                 let m = army.morale + amount;
+                 let effectiveAmount = amount;
+                 
+                 if (amount < 0) {
+                     const factor = army.morale / 100;
+                     // Ensure at least 1 point loss if amount is significant, but scale it down
+                     effectiveAmount = Math.ceil(amount * factor);
+                     // If it rounded to 0 but amount was negative, force at least -1 (unless morale is 0)
+                     if (effectiveAmount === 0 && army.morale > 0) effectiveAmount = -1;
+                 }
+
+                 let m = army.morale + effectiveAmount;
                  if (m < 0) m = 0;
                  if (m > army.count) m = army.count;
                  
