@@ -344,7 +344,7 @@ export class GameEngine {
                 party: partyId,
                 count: count > Config.UNITS.MAX_COUNT ? Config.UNITS.MAX_COUNT : count,
                 morale: morale,
-                moved: false,
+                moved: true,
                 remove: false
             };
             if (army.morale > army.count) army.morale = army.count;
