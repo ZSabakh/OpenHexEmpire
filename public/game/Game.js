@@ -721,21 +721,63 @@ export class Game {
                   return;
               }
 
-              const army = fromField.army;
-              if (army) {
-                  // FIX: Use GameEngine (via logic) to execute the move locally.
-                  // This ensures the client runs the same logic as the server for state updates.
-                  this.logic.executeMove(fromField, toField);
-                  
-                  // Animate the movement (GameEngine.executeMove doesn't animate)
-                  Animations.animateMove(army, toField._x, toField._y);
-
-                  // Apply server events to synchronize state (counts, morale, randomness results)
-                  // and trigger combat/interaction animations.
-                  if (moveData.events) {
-                      for (const event of moveData.events) {
-                          this.applyServerEvent(event);
+              // Try to find the army at the source field
+              let army = fromField.army;
+              
+              // If not found at source, try to find by ID (recovery from desync)
+              if (!army && moveData.armyId) {
+                  army = this.state.armies[moveData.armyId];
+                  if (army) {
+                      console.warn(`Army ${moveData.armyId} not at source field (${moveData.fromField.fx},${moveData.fromField.fy}), found at (${army.field.fx},${army.field.fy}). Correcting...`);
+                      // Detach from wrong field
+                      if (army.field && army.field.army === army) {
+                          army.field.army = null;
                       }
+                      // We don't attach to fromField because we're about to move it anyway
+                      army.field = fromField;
+                  } else {
+                      console.error(`Army ${moveData.armyId} not found anywhere!`);
+                  }
+              }
+
+              // ALWAYS apply server events first - they are authoritative state updates
+              // This ensures annexations and combat results are processed even if visual army is missing
+              let combatDelay = 0;
+              if (moveData.events) {
+                  for (const event of moveData.events) {
+                      this.applyServerEvent(event);
+                      if (event.type === 'combat') {
+                          // Calculate delay based on attack animation duration + small buffer
+                          // Lunge + Impact + Return
+                          combatDelay = Config.ANIMATION.ATTACK_LUNGE_DURATION + 
+                                      Config.ANIMATION.ATTACK_IMPACT_DURATION + 
+                                      Config.ANIMATION.ATTACK_RETURN_DURATION + 0.1;
+                      }
+                  }
+              }
+
+              if (army) {
+                  // Step 1: Clear the source field (if it was attached)
+                  if (fromField.army === army) {
+                      fromField.army = null;
+                  }
+                  
+                  // Step 2: Update army reference
+                  army.field = toField;
+                  army.moved = true;
+                  
+                  // Step 3: Animate the movement
+                  Animations.animateMove(army, toField._x, toField._y, combatDelay);
+                  
+                  // Step 4: Place the army at destination if it wasn't removed
+                  // After combat: loser is marked for removal, winner stays
+                  // After join: moving army is marked for removal, target army stays at toField
+                  // After simple move: army just moves to empty toField
+                  if (!army.remove) {
+                      // Army survived (either won combat or moved to empty field)
+                      // The events have already been processed, so if this army wasn't removed,
+                      // it means it's the winner (or moved to empty field)
+                      toField.army = army;
                   }
               }
 

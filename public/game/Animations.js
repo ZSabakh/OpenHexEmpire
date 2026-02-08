@@ -205,7 +205,7 @@ export class Animations {
      * @param {number} targetX - Target X coordinate
      * @param {number} targetY - Target Y coordinate
      */
-    static animateMove(army, targetX, targetY) {
+    static animateMove(army, targetX, targetY, delay = 0) {
         if (typeof gsap === 'undefined') {
             // Fallback: Snap to target
             if (army.visual) {
@@ -223,7 +223,8 @@ export class Animations {
             x: targetX,
             y: targetY,
             duration: Config.ANIMATION.MOVE_DURATION,
-            ease: "power1.inOut"
+            ease: "power1.inOut",
+            delay: delay
         });
     }
 }
