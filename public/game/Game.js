@@ -773,14 +773,13 @@ export class Game {
                   if (!field) continue;
                   
                   if (event.isNew) {
-                      
                       const army = {
                           id: event.armyId,
                           field: field,
                           party: event.party,
                           count: event.newCount,
                           morale: event.newMorale,
-                          moved: false,
+                          moved: true,
                           remove: false,
                           remove_time: -1,
                           visual: { x: field._x, y: field._y }
@@ -789,25 +788,25 @@ export class Game {
                       field.army = army;
                       this.state.armies[army.id] = army;
                   } else {
-                      
+                      // Reinforcing existing army
                       let army = field.army;
                       
                       if (army && army.id !== event.armyId) {
-                          
+                          // ID mismatch, replace the army
                           delete this.state.armies[army.id];
                           army.id = event.armyId;
                           this.state.armies[army.id] = army;
                       }
                       
                       if (!army) {
-                          
+                          // Army doesn't exist, create it (shouldn't happen but handle it)
                           army = {
                               id: event.armyId,
                               field: field,
                               party: event.party,
                               count: event.newCount,
                               morale: event.newMorale,
-                              moved: false,
+                              moved: true,
                               remove: false,
                               remove_time: -1,
                               visual: { x: field._x, y: field._y }
@@ -815,8 +814,10 @@ export class Game {
                           field.army = army;
                           this.state.armies[army.id] = army;
                       } else {
+                          // Update existing army stats (reinforcement)
                           army.count = event.newCount;
                           army.morale = event.newMorale;
+                          // Keep the existing moved status for reinforcements
                       }
                   }
               }
@@ -922,17 +923,6 @@ export class Game {
   }
 
   handleNewTurn(turnData) {
-      // FIX: Reset 'moved' status for the new party immediately to avoid race conditions
-      // This ensures getMovePoints calculation is based on correct state
-      if (this.isMultiplayer && this.state) {
-           for (const key in this.state.armies) {
-               const army = this.state.armies[key];
-               if (army.party === turnData.turnParty) {
-                   army.moved = false;
-               }
-           }
-      }
-
       // CRITICAL FIX: Queue the new turn action to ensure it processes AFTER all previous turn animations complete
       // This prevents race conditions where handleMoveExecuted checks turnParty while still processing previous player's moves
       this.queueAction({
@@ -941,6 +931,19 @@ export class Game {
               this.state.turnParty = turnData.turnParty;
               
               console.log(`New turn: ${turnData.turn + 1}, Party: ${turnData.partyName}, Control: ${turnData.control}`);
+              
+              // FIX: Reset 'moved' status for the new party's armies
+              // This must happen AFTER units_spawned event has been processed (which it has, due to action queue)
+              // Since spawned units have moved: true, we need to reset ALL armies to false
+              // The spawned armies will remain unmovable because they were just created this turn
+              if (this.isMultiplayer && this.state) {
+                  for (const key in this.state.armies) {
+                      const army = this.state.armies[key];
+                      if (army.party === turnData.turnParty && !army.remove) {
+                          army.moved = false;
+                      }
+                  }
+              }
               
               this.updateMapStatus();
               this.updateTopBar();
