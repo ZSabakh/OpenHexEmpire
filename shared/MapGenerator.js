@@ -185,9 +185,18 @@ export class MapGenerator {
                 this.model.allTowns.push(field);
                 field.capital = cp;
                 this.model.parties[cp].capital = field;
-                // Annex immediately (handled by GameLogic usually, but here we set initial state)
+                
+                // 1. Assign Capital
                 field.party = cp;
                 this.model.parties[cp].towns.push(field);
+
+                // 2. Assign Neighbors (Initial Expansion)
+                for (const n of field.neighbours) {
+                    if (n && n.type === "land" && !n.estate) {
+                        n.party = cp;
+                        this.model.parties[cp].lands.push(n);
+                    }
+                }
                 
                 cp++;
             }

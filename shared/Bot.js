@@ -1,4 +1,4 @@
-import { Config } from '../../shared/Config.js';
+import { Config } from './Config.js';
 
 export class Bot {
   constructor(pathfinder) {
@@ -214,21 +214,14 @@ export class Bot {
           let profitability = Config.AI_WEIGHTS.CAPITAL_THREAT;
           if (otherParty.capital.party === otherParty.capital.capital) {
             profitability = field.profitability[otherParty.id];
-            if (otherParty.control === "human") {
-              profitability += state.difficulty * 2;
-            }
+          if (otherParty.control === "human") {
+            profitability += state.difficulty * 2;
           }
-          if (state.peace === partyId && otherParty.id === state.humanPlayerId && !state.duel) {
-            profitability -= 500;
-          }
-          if (totalProfitability < profitability) {
+        }
+        if (totalProfitability < profitability) {
             totalProfitability = profitability;
           }
         }
-      }
-
-      if (state.peace === partyId && state.humanPlayerId === field.party && !state.duel) {
-        profitability += Config.AI_WEIGHTS.BETRAYAL_PENALTY;
       }
 
       if (field.type === "land" && field.party !== partyId) {

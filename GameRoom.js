@@ -2,8 +2,8 @@ import { GameModel } from './shared/GameModel.js';
 import { MapGenerator } from './shared/MapGenerator.js';
 import { Pathfinder } from './shared/Pathfinder.js';
 import { Random } from './shared/Random.js';
-import { GameLogicServer } from './GameLogicServer.js';
-import { Bot } from './public/game/Bot.js';
+import { GameEngine } from './shared/GameEngine.js';
+import { Bot } from './shared/Bot.js';
 
 export class GameRoom {
     constructor(roomId, mapSeed) {
@@ -31,60 +31,34 @@ export class GameRoom {
         const mapGenerator = new MapGenerator(this.gameModel, random, this.pathfinder);
         mapGenerator.generate();
         
+        // Initialize server-side game logic using shared GameEngine
+        this.gameLogic = new GameEngine(this.gameModel, this.pathfinder);
         
-        this.linkNeighbours();
-        
-        
-        this.gameLogic = new GameLogicServer(this.gameModel, this.pathfinder);
-        
-        
+        // Calculate AI Helpers (Profitability, etc.)
         this.calcAIHelpers();
+        
+        this.initUnits();
         
         console.log(`[GameRoom ${this.roomId}] Map generated with seed ${this.mapSeed}`);
     }
 
-    linkNeighbours() {
-        for (let x = 0; x < this.gameModel.width; x++) {
-            for (let y = 0; y < this.gameModel.height; y++) {
-                const field = this.gameModel.getField(x, y);
-                if (field) {
-                    this.findNeighbours(field);
-                }
-            }
-        }
-    }
-
-    findNeighbours(field) {
-        const x = field.fx;
-        const y = field.fy;
-        const get = (nx, ny) => this.gameModel.getField(nx, ny);
-
-        if (x % 2 === 0) {
-            field.neighbours[0] = get(x + 1, y);
-            field.neighbours[1] = get(x, y + 1);
-            field.neighbours[2] = get(x - 1, y);
-            field.neighbours[3] = get(x - 1, y - 1);
-            field.neighbours[4] = get(x, y - 1);
-            field.neighbours[5] = get(x + 1, y - 1);
-        } else {
-            field.neighbours[0] = get(x + 1, y + 1);
-            field.neighbours[1] = get(x, y + 1);
-            field.neighbours[2] = get(x - 1, y + 1);
-            field.neighbours[3] = get(x - 1, y);
-            field.neighbours[4] = get(x, y - 1);
-            field.neighbours[5] = get(x + 1, y);
+    // Helper to spawn initial units for all factions
+    initUnits() {
+        for (const party of this.gameModel.parties) {
+            this.gameLogic.spawnUnits(party.id);
+            this.gameLogic.syncPartyArmies();
         }
     }
     
     calcAIHelpers() {
         for (let p = 0; p < this.gameModel.parties.length; p++) {
             const capital = this.gameModel.parties[p].capital;
-            if (!capital) continue; 
+            if (!capital) continue; // Should not happen if map generated correctly
             
             for (let x = 0; x < this.gameModel.width; x++) {
                 for (let y = 0; y < this.gameModel.height; y++) {
                     const field = this.gameModel.getField(x, y);
-                    
+                    // Use this.pathfinder
                     const path = this.pathfinder.findPath(field, capital, [], true);
                     if (!path) continue;
                     field.profitability[p] = -path.length;
@@ -130,7 +104,7 @@ export class GameRoom {
     setFactionSelection(partyId, playerName) {
         this.factionSelections[partyId] = playerName;
         
-        
+        // Mark this party as human-controlled in the game model
         if (this.gameModel.parties[partyId]) {
             this.gameModel.parties[partyId].control = "human";
             console.log(`[GameRoom ${this.roomId}] Faction ${partyId} set to human control for ${playerName}`);
@@ -176,7 +150,15 @@ export class GameRoom {
         if (player) {
             if (player.partyId !== null) {
                 delete this.factionSelections[player.partyId];
-                console.log(`[GameRoom ${this.roomId}] Cleared faction ${player.partyId} for leaving player`);
+                delete this.readyStatus[player.partyId];
+                
+                // If game has started, convert the faction to AI control
+                if (this.gameStarted && this.gameModel.parties[player.partyId]) {
+                    this.gameModel.parties[player.partyId].control = "computer";
+                    console.log(`[GameRoom ${this.roomId}] Converted faction ${player.partyId} (${this.gameModel.parties[player.partyId].name}) to AI control`);
+                } else {
+                    console.log(`[GameRoom ${this.roomId}] Cleared faction ${player.partyId} for leaving player`);
+                }
             }
             
             this.players.delete(socketId);
@@ -192,29 +174,43 @@ export class GameRoom {
             mapSeed: this.mapSeed,
             players: Array.from(this.players.values()),
             gameStarted: this.gameStarted,
-            fields: this.serializeFields(),
+            dynamicState: this.serializeDynamicState(),
             parties: this.serializeParties(),
             turn: this.gameModel.turn,
             turnParty: this.gameModel.turnParty
         };
     }
 
-    serializeFields() {
-        const fieldsArray = [];
+    serializeDynamicState() {
+        // Only send dynamic state: ownership and armies
+        // Client generates static map (terrain, estates) from seed
+        const dynamicFields = [];
         for (const key in this.gameModel.fields) {
             const field = this.gameModel.fields[key];
-            fieldsArray.push({
-                fx: field.fx,
-                fy: field.fy,
-                type: field.type,
-                estate: field.estate,
-                party: field.party,
-                capital: field.capital,
-                town_name: field.town_name,
-                land_id: field.land_id
-            });
+            
+            // Only include fields with dynamic state (ownership or armies)
+            if (field.party !== -1 || field.army) {
+                const fieldData = {
+                    fx: field.fx,
+                    fy: field.fy,
+                    party: field.party
+                };
+                
+                // Include army data if present
+                if (field.army) {
+                    fieldData.army = {
+                        id: field.army.id,
+                        party: field.army.party,
+                        count: field.army.count,
+                        morale: field.army.morale,
+                        moved: field.army.moved
+                    };
+                }
+                
+                dynamicFields.push(fieldData);
+            }
         }
-        return fieldsArray;
+        return dynamicFields;
     }
 
     serializeParties() {
@@ -231,10 +227,9 @@ export class GameRoom {
     }
 
     getMapData() {
+        // Only send the seed - client will generate the map locally
         return {
             mapSeed: this.mapSeed,
-            fields: this.serializeFields(),
-            parties: this.serializeParties(),
             width: this.gameModel.width,
             height: this.gameModel.height
         };
@@ -255,6 +250,18 @@ export class GameRoom {
     }
 
     nextTurn() {
+        const activeParties = this.gameModel.parties.filter(p => p.status > 0);
+        
+        // Condition A: Only 1 party left (Total Domination)
+        if (activeParties.length === 1 && this.players.size > 0) {
+            console.log(`[GameRoom ${this.roomId}] Game Won by ${activeParties[0].name}`);
+            return { 
+                gameEnded: true, 
+                reason: 'victory', 
+                winner: activeParties[0].id 
+            };
+        }
+
         this.gameModel.turnParty++;
         if (this.gameModel.turnParty >= this.gameModel.parties.length) {
             this.gameModel.turnParty = 0;
@@ -263,28 +270,29 @@ export class GameRoom {
 
             if (this.gameModel.turn >= 150) {
                 console.log(`[GameRoom ${this.roomId}] Game ended after 150 turns`);
-                return { gameEnded: true };
+                return { gameEnded: true, reason: 'turn_limit' };
             }
         }
 
         const currentParty = this.gameModel.parties[this.gameModel.turnParty];
 
-        
+        // Skip eliminated parties
         if (currentParty.status === 0) {
             return this.nextTurn();
         }
 
         console.log(`[GameRoom ${this.roomId}] Turn ${this.gameModel.turn + 1}, Party ${this.gameModel.turnParty} (${currentParty.name}) - ${currentParty.control}`);
         
-        
-        this.gameLogic.cleanupTurn(this.gameModel.turnParty);
+        // Cleanup turn for the current party (reset movement, decay morale)
+        const cleanupUpdates = this.gameLogic.cleanupTurn(this.gameModel.turnParty);
 
         return {
             gameEnded: false,
             turn: this.gameModel.turn,
             turnParty: this.gameModel.turnParty,
             partyName: currentParty.name,
-            control: currentParty.control
+            control: currentParty.control,
+            moraleUpdates: cleanupUpdates
         };
     }
 
@@ -302,7 +310,7 @@ export class GameRoom {
             return { valid: false, error: 'Not your turn' };
         }
 
-        
+        // Check if the fields exist
         const fromField = this.gameModel.getField(moveData.fromField.fx, moveData.fromField.fy);
         const toField = this.gameModel.getField(moveData.toField.fx, moveData.toField.fy);
         
@@ -318,12 +326,24 @@ export class GameRoom {
             return { valid: false, error: 'Army does not belong to you' };
         }
 
+        if (fromField.army.moved) {
+            return { valid: false, error: 'Army has already moved' };
+        }
+
         return { valid: true, fromField, toField };
     }
 
     executeMove(fromField, toField) {
-        
         const result = this.gameLogic.executeMove(fromField, toField);
+        
+        const statusEvents = this.gameLogic.updatePartyStatuses();
+        
+        if (statusEvents && statusEvents.length > 0) {
+            result.events.push(...statusEvents);
+        }
+        
+        this.gameLogic.syncPartyArmies();
+        
         return result;
     }
 

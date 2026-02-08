@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { Server } from 'socket.io';
 import { GameRoom } from './GameRoom.js';
+import { TurnExecutor } from './shared/TurnExecutor.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -19,71 +20,25 @@ const gameRooms = new Map();
 function handleAITurn(roomId, gameRoom, io) {
     console.log(`[Server] Handling AI turn for room ${roomId}, party ${gameRoom.gameModel.turnParty}`);
     
-    
+    // Sync party armies before AI calculations
     gameRoom.gameLogic.syncPartyArmies();
-    gameRoom.bot.clearCache();
-
     
     const partyId = gameRoom.gameModel.turnParty;
-    const movePoints = 5; 
-    let moveIndex = 0;
 
-    const executeAIMove = () => {
-        if (moveIndex >= movePoints) {
-            
-            const turnResult = gameRoom.nextTurn();
-            
-            if (turnResult.gameEnded) {
-                io.to(roomId).emit('game_ended', { reason: 'Turn limit reached' });
-            } else {
-                
-                const newPartyId = turnResult.turnParty;
-                const spawnEvents = gameRoom.gameLogic.spawnUnits(newPartyId);
-
-                io.to(roomId).emit('new_turn', {
-                    turn: turnResult.turn,
-                    turnParty: turnResult.turnParty,
-                    partyName: turnResult.partyName,
-                    control: turnResult.control
-                });
-                
-                if (spawnEvents.length > 0) {
-                    io.to(roomId).emit('units_spawned', { events: spawnEvents });
-                }
-                
-                
-                if (turnResult.control === 'computer') {
-                    handleAITurn(roomId, gameRoom, io);
-                }
-            }
-            return;
-        }
-
-        
-        const profitability = gameRoom.bot.calcArmiesProfitability(partyId, gameRoom.gameModel);
-        
-        console.log(`[Server] AI (Party ${partyId}) found ${profitability.length} movable armies`);
-
-        if (profitability.length > 0) {
-            
-            profitability.sort((a, b) => {
-                if (a.profitability > b.profitability) return -1;
-                if (a.profitability < b.profitability) return 1;
-                const aTotal = a.count + a.morale;
-                const bTotal = b.count + b.morale;
-                return bTotal - aTotal;
-            });
-
-            const bestArmy = profitability[0];
-            const move = bestArmy.move;
-            
+    // Use shared TurnExecutor
+    TurnExecutor.executeAITurn({
+        partyId: partyId,
+        gameModel: gameRoom.gameModel,
+        gameLogic: gameRoom.gameLogic,
+        bot: gameRoom.bot,
+        onMoveExecute: (bestArmy, move) => {
             console.log(`[Server] AI executing move for army ${bestArmy.id} from (${bestArmy.field.fx},${bestArmy.field.fy}) to (${move.fx},${move.fy}) with prof ${bestArmy.profitability}`);
-
             
+            // Execute the move
             const result = gameRoom.executeMove(bestArmy.field, move);
             
             if (result.success) {
-                
+                // Broadcast move to all clients
                 io.to(roomId).emit('move_executed', {
                     success: true,
                     fromField: result.fromField,
@@ -93,14 +48,53 @@ function handleAITurn(roomId, gameRoom, io) {
                     playerId: 'AI'
                 });
             }
-        }
+        },
+        onTurnComplete: () => {
+            // Spawn units for the CURRENT party (Ending Turn) BEFORE switching turns
+            const currentPartyId = gameRoom.gameModel.turnParty;
+            const spawnEvents = gameRoom.gameLogic.spawnUnits(currentPartyId);
+            
+            if (spawnEvents.length > 0) {
+                io.to(roomId).emit('units_spawned', { events: spawnEvents });
+            }
 
-        moveIndex++;
-        setTimeout(executeAIMove, 500); 
-    };
-
-    
-    setTimeout(executeAIMove, 1000);
+            // Proceed to next turn
+            const turnResult = gameRoom.nextTurn();
+            
+            if (turnResult.gameEnded) {
+                if (turnResult.reason === 'victory') {
+                    io.to(roomId).emit('game_ended', { 
+                        reason: 'victory', 
+                        winnerPartyId: turnResult.winner 
+                    });
+                } else {
+                    io.to(roomId).emit('game_ended', { reason: 'Turn limit reached' });
+                }
+            } else {
+                io.to(roomId).emit('new_turn', {
+                    turn: turnResult.turn,
+                    turnParty: turnResult.turnParty,
+                    partyName: turnResult.partyName,
+                    control: turnResult.control,
+                    moraleUpdates: turnResult.moraleUpdates
+                });
+                
+                // If next turn is also AI, handle it
+                if (turnResult.control === 'computer') {
+                    handleAITurn(roomId, gameRoom, io);
+                }
+            }
+        },
+        getDelay: (isAnimating) => {
+            // Server doesn't have animations, use fixed delay
+            return 500;
+        },
+        checkAnimating: () => {
+            // Server never has animations
+            return false;
+        },
+        initialDelay: 1000 // Wait 1 second before starting AI moves
+    });
 }
 
 
@@ -258,25 +252,29 @@ io.on('connection', (socket) => {
                 gameRoom.startGame();
                 io.to(roomId).emit('all_players_ready');
                 
-                
                 const turnResult = gameRoom.nextTurn();
                 
-                
-                const spawnEvents = gameRoom.gameLogic.spawnUnits(turnResult.turnParty);
+                // FIX: REMOVED spawnUnits call here. 
+                // Units are now initialized in GameRoom.initializeGame().
+                // Players play Turn 1 with starting units. Reinforcements come at end_turn.
 
-                if (!turnResult.gameEnded) {
+                if (turnResult.gameEnded) {
+                    if (turnResult.reason === 'victory') {
+                        io.to(roomId).emit('game_ended', { 
+                            reason: 'victory', 
+                            winnerPartyId: turnResult.winner 
+                        });
+                    }
+                } else {
                     io.to(roomId).emit('new_turn', {
                         turn: turnResult.turn,
                         turnParty: turnResult.turnParty,
                         partyName: turnResult.partyName,
-                        control: turnResult.control
+                        control: turnResult.control,
+                        moraleUpdates: turnResult.moraleUpdates
                     });
                     
-                    if (spawnEvents.length > 0) {
-                        io.to(roomId).emit('units_spawned', { events: spawnEvents });
-                    }
-                    
-                    
+                    // If next turn is also AI, handle it
                     if (turnResult.control === 'computer') {
                         handleAITurn(roomId, gameRoom, io);
                     }
@@ -346,27 +344,33 @@ io.on('connection', (socket) => {
 
         console.log(`[Server] Player ${player.name} ended their turn in room ${roomId}`);
 
+        // FIX: Spawn units for the CURRENT party (Ending Turn) BEFORE switching turns
+        const currentPartyId = gameRoom.gameModel.turnParty;
+        const spawnEvents = gameRoom.gameLogic.spawnUnits(currentPartyId);
+        
+        if (spawnEvents.length > 0) {
+            io.to(roomId).emit('units_spawned', { events: spawnEvents });
+        }
         
         const turnResult = gameRoom.nextTurn();
         
         if (turnResult.gameEnded) {
-            io.to(roomId).emit('game_ended', { reason: 'Turn limit reached' });
+            if (turnResult.reason === 'victory') {
+                io.to(roomId).emit('game_ended', { 
+                    reason: 'victory', 
+                    winnerPartyId: turnResult.winner 
+                });
+            } else {
+                io.to(roomId).emit('game_ended', { reason: 'Turn limit reached' });
+            }
         } else {
-            
-            const newPartyId = turnResult.turnParty;
-            const spawnEvents = gameRoom.gameLogic.spawnUnits(newPartyId);
-
             io.to(roomId).emit('new_turn', {
                 turn: turnResult.turn,
                 turnParty: turnResult.turnParty,
                 partyName: turnResult.partyName,
-                control: turnResult.control
+                control: turnResult.control,
+                moraleUpdates: turnResult.moraleUpdates
             });
-
-            if (spawnEvents.length > 0) {
-                io.to(roomId).emit('units_spawned', { events: spawnEvents });
-            }
-            
             
             if (turnResult.control === 'computer') {
                 handleAITurn(roomId, gameRoom, io);

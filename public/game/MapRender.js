@@ -11,6 +11,14 @@ export class MapRender {
     this.lastTerritoryHash = null;
   }
 
+  static getPixelCoordinates(fx, fy, hexWidth, hexHeight) {
+    const x = fx * (hexWidth * 0.75) + hexWidth / 2;
+    const y = (fx % 2 === 0) 
+         ? fy * hexHeight + hexHeight / 2 
+         : fy * hexHeight + hexHeight;
+    return { x, y };
+  }
+
   drawMap(state, images, cursorPos) {
     if (this.lastState !== state) {
         this.cacheEstates(state);
@@ -139,7 +147,7 @@ export class MapRender {
       for (let x = 0; x < state.width; x++) {
           for (let y = 0; y < state.height; y++) {
               const field = state.getField(x, y);
-              if (field.estate) {
+              if (field && field.estate) {
                   this.cachedEstates.push(field);
               }
           }

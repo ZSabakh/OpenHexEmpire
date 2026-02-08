@@ -1,3 +1,4 @@
+import { Config } from '../../shared/Config.js';
 import { Game } from './Game.js';
 import { SocketManager } from './SocketManager.js';
 
@@ -111,9 +112,9 @@ $(function(){
   var modalInstance = M.Modal.init(document.getElementById('countrySelectModal'));
 
   const countrySelectGrid = document.getElementById('countrySelectGrid');
-  const factionNames = ["Redosia", "Violetnam", "Bluegaria", "Greenland"];
-  const capitalImages = ["capital_red.png", "capital_violet.png", "capital_blue.png", "capital_green.png"];
-  const colors = ['#ff0000', '#ff00ff', '#00bbff', '#00ff00'];
+  const factionNames = Config.COLORS.FACTION_NAMES;
+  const capitalImages = Config.IMAGES.CAPITALS;
+  const colors = ['#ff0000', '#ff00ff', '#00bbff', '#00ff00']; // Kept for now as Config doesn't have hex codes clearly (it has RGB strings)
   
   factionNames.forEach((name, index) => {
     const capitalItem = document.createElement('div');
@@ -282,6 +283,7 @@ $(function(){
   window.addEventListener('moveError', (e) => {
     const { error } = e.detail;
     M.toast({html: `Move error: ${error}`, classes: 'red'});
+    game.handleMoveError(error);
   });
 
   window.addEventListener('turnError', (e) => {
@@ -290,8 +292,20 @@ $(function(){
   });
 
   window.addEventListener('gameEnded', (e) => {
-    const { reason } = e.detail;
-    M.toast({html: `Game ended: ${reason}`, classes: 'orange'});
+    const { reason, winnerPartyId } = e.detail;
+    
+    // If I am the winner
+    if (reason === 'victory' && winnerPartyId === game.state.humanPlayerId) {
+        game.showGameEndModal('victory');
+    } 
+    // If someone else won (Spectator Victory)
+    else if (reason === 'victory') {
+        const winnerName = game.state.parties[winnerPartyId].name;
+        game.showGameEndModal('spectator_victory', winnerName);
+    }
+    else {
+        M.toast({html: `Game ended: ${reason}`, classes: 'orange'});
+    }
   });
 
   function showReadyButton() {

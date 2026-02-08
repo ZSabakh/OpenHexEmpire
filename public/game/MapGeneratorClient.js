@@ -1,14 +1,13 @@
 import { MapGenerator } from '../../shared/MapGenerator.js';
+import { MapRender } from './MapRender.js';
 
 export class MapGeneratorClient extends MapGenerator {
-    constructor(gameView, random, pathfinder) {
-        super(gameView.model, random, pathfinder);
-        this.view = gameView;
+    constructor(gameModel, random, pathfinder) {
+        super(gameModel, random, pathfinder);
     }
 
     generate() {
         super.generate();
-        
         this.addPixelCoordinates();
     }
 
@@ -19,11 +18,10 @@ export class MapGeneratorClient extends MapGenerator {
         for (let x = 0; x < this.model.width; x++) {
             for (let y = 0; y < this.model.height; y++) {
                 const field = this.model.getField(x, y);
-                
-                field._x = x * (hexWidth * 0.75) + hexWidth / 2;
-                field._y = (x % 2 === 0) 
-                    ? y * hexHeight + hexHeight / 2 
-                    : y * hexHeight + hexHeight;
+                // Use the static helper from MapRender for consistency
+                const coords = MapRender.getPixelCoordinates(x, y, hexWidth, hexHeight);
+                field._x = coords.x;
+                field._y = coords.y;
             }
         }
     }

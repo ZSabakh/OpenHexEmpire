@@ -44,9 +44,6 @@ export class GameModel {
         this.difficulty = 5;
         this.duel = false; // True if < 3 parties left
         
-        this.peace = -1; // Party ID we have a pact with
-        this.pactJustBroken = -1;
-
         this.humanCondition = 1;
         this.isSpectating = false; // True when player is defeated and watching AI battle
         
@@ -60,7 +57,7 @@ export class GameModel {
     }
 
     getField(x, y) {
-        return this.fields[`f${x}x${y}`];
+        return this.fields[`f${x}x${y}`] || null;
     }
 
     setField(x, y, field) {
