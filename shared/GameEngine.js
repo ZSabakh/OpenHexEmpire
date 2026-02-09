@@ -145,8 +145,15 @@ export class GameEngine {
         targetArmy.count = joinResult.count;
         targetArmy.morale = joinResult.morale;
 
-        // Mark moving army for removal
-        movingArmy.remove = true;
+        if (joinResult.remainder > 0) {
+            // Overflow: Moving army keeps remainder and stays
+            movingArmy.count = joinResult.remainder;
+            movingArmy.remove = false;
+            result.movingArmy.finalCount = joinResult.remainder;
+        } else {
+            // Full merge
+            movingArmy.remove = true;
+        }
 
         events.push(result);
         return events;

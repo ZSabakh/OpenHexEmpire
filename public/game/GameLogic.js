@@ -249,10 +249,31 @@ export class GameLogic extends GameEngine {
             
             // Combat/Join Animations
             this.handleEventsVisuals(result.events, army, targetField);
+            
+            // Log detailed events
+            this.logEvents(result.events);
         }
 
         this.updateBoard();
         return result.success;
+    }
+
+    logEvents(events) {
+        for (const event of events) {
+            if (event.type === 'combat') {
+                const winnerParty = this.state.parties[this.state.armies[event.winner].party].name;
+                const loserParty = this.state.parties[this.state.armies[event.loser].party].name;
+                this.updateGameLog(`<span style="color:#ff5252">Combat:</span> ${winnerParty} defeated ${loserParty}`);
+            } else if (event.type === 'annex') {
+                const partyName = this.state.parties[event.newParty].name;
+                this.updateGameLog(`<span style="color:#69f0ae">Annex:</span> ${partyName} captured territory at (${event.field.fx}, ${event.field.fy})`);
+            } else if (event.type === 'join') {
+                this.updateGameLog(`<span style="color:#448aff">Merge:</span> Army merged at target.`);
+            } else if (event.type === 'land_transfer') {
+                 const partyName = this.state.parties[event.newParty].name;
+                 this.updateGameLog(`Land Transfer: ${partyName} inherited territory.`);
+            }
+        }
     }
 
     handleEventsVisuals(events, movingArmy, targetField) {
@@ -313,8 +334,10 @@ export class GameLogic extends GameEngine {
         const events = super.spawnUnits(partyId);
         
         // Initialize visual props for new units
+        let spawnCount = 0;
         for (const event of events) {
             if (event.type === 'spawn') {
+                spawnCount += event.newCount - (event.isNew ? 0 : (event.newCount - 5)); // Rough estimate, or just count events
                 const field = this.state.getField(event.field.fx, event.field.fy);
                 if (field && field.army) {
                     if (!field.army.visual) {
@@ -323,6 +346,10 @@ export class GameLogic extends GameEngine {
                     field.army.remove_time = -1;
                 }
             }
+        }
+        
+        if (events.length > 0) {
+            this.updateGameLog(`Spawned reinforcements for ${this.state.parties[partyId].name}`);
         }
         
         return events;

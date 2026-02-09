@@ -42,19 +42,35 @@ export class GameRules {
     }
 
     static calculateJoin(movingArmy, targetArmy) {
-        const newCount = targetArmy.count + movingArmy.count;
-        const newMorale = Math.floor((targetArmy.count * targetArmy.morale + movingArmy.count * movingArmy.morale) / newCount);
+        const totalCount = targetArmy.count + movingArmy.count;
+        const maxCount = Config.UNITS.MAX_COUNT;
         
-        let finalCount = newCount;
-        if (finalCount > Config.UNITS.MAX_COUNT) finalCount = Config.UNITS.MAX_COUNT;
-        
-        let finalMorale = newMorale;
-        if (finalMorale > finalCount) finalMorale = finalCount;
-        
-        return {
-            count: finalCount,
-            morale: finalMorale
-        };
+        if (totalCount <= maxCount) {
+            const newMorale = Math.floor((targetArmy.count * targetArmy.morale + movingArmy.count * movingArmy.morale) / totalCount);
+            let finalMorale = newMorale;
+            if (finalMorale > totalCount) finalMorale = totalCount;
+            
+            return {
+                count: totalCount,
+                morale: finalMorale,
+                remainder: 0
+            };
+        } else {
+            // Overflow
+            const joinedCount = maxCount - targetArmy.count;
+            const remainder = movingArmy.count - joinedCount;
+            
+            // Weighted average for the merged part
+            const newMorale = Math.floor((targetArmy.count * targetArmy.morale + joinedCount * movingArmy.morale) / maxCount);
+            let finalMorale = newMorale;
+            if (finalMorale > maxCount) finalMorale = maxCount;
+            
+            return {
+                count: maxCount,
+                morale: finalMorale,
+                remainder: remainder
+            };
+        }
     }
 
     static calculateMoraleEarned(partyId, field) {

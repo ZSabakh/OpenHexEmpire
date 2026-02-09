@@ -744,6 +744,13 @@ export class Game {
               // This ensures annexations and combat results are processed even if visual army is missing
               let combatDelay = 0;
               if (moveData.events) {
+                  // Log the move first
+                  const partyName = this.state.parties[moveData.playerId] ? this.state.parties[moveData.playerId].name : "Unknown";
+                  this.logic.updateGameLog(`${partyName} moved unit from (${moveData.fromField.fx},${moveData.fromField.fy}) to (${moveData.toField.fx},${moveData.toField.fy})`);
+                  
+                  // Log detailed events
+                  this.logic.logEvents(moveData.events);
+
                   for (const event of moveData.events) {
                       this.applyServerEvent(event);
                       if (event.type === 'combat') {
@@ -973,6 +980,7 @@ export class Game {
               this.state.turnParty = turnData.turnParty;
               
               console.log(`New turn: ${turnData.turn + 1}, Party: ${turnData.partyName}, Control: ${turnData.control}`);
+              this.logic.updateGameLog(`<b>Turn ${turnData.turn + 1}: ${turnData.partyName}</b>`);
               
               // FIX: Reset 'moved' status for the new party's armies
               // This must happen AFTER units_spawned event has been processed (which it has, due to action queue)
