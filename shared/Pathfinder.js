@@ -201,6 +201,9 @@ class Pathfinder {
       if (!field1.army) {
         return true;
       }
+      if (!field2.army) {
+        return false;
+      }
       if (check_power && field1.army && field2.army && field1.army.party != field2.army.party) {
         var ap = field1.army.count + field1.army.morale;
         var bp = field2.army.count + field2.army.morale;

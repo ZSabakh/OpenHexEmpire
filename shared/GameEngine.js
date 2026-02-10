@@ -53,6 +53,15 @@ export class GameEngine {
                 const joinEvents = this.joinUnits(army, toField.army);
                 result.events.push(...joinEvents);
                 toField.army.moved = true;
+                
+                // Handle overflow: if moving army has remainder, place it back at source
+                if (!army.remove) {
+                    // Army survived with remainder - put it back at source field
+                    fromField.army = army;
+                    army.field = fromField;
+                    army.moved = true;
+                }
+                
                 const annexEvents = this.annexLand(army.party, toField);
                 result.events.push(...annexEvents);
             }
@@ -146,13 +155,15 @@ export class GameEngine {
         targetArmy.morale = joinResult.morale;
 
         if (joinResult.remainder > 0) {
-            // Overflow: Moving army keeps remainder and stays
+            // Overflow: Moving army keeps remainder and stays at source
             movingArmy.count = joinResult.remainder;
             movingArmy.remove = false;
             result.movingArmy.finalCount = joinResult.remainder;
+            result.movingArmy.remainder = joinResult.remainder;
         } else {
             // Full merge
             movingArmy.remove = true;
+            result.movingArmy.remainder = 0;
         }
 
         events.push(result);
@@ -368,6 +379,7 @@ export class GameEngine {
 
     /**
      * Sync party armies - update party army lists from field data
+     * Also cleans up removed/orphaned armies from the global armies dict
      */
     syncPartyArmies() {
         // Reset lists
@@ -377,16 +389,25 @@ export class GameEngine {
             party.totalPower = 0;
         }
         
+        const toDelete = [];
         for (const key in this.gameModel.armies) {
             const army = this.gameModel.armies[key];
-            if (!army.remove) {
-                const party = this.gameModel.parties[army.party];
-                if (party) {
-                    party.armies.push(army);
-                    party.totalCount += army.count;
-                    party.totalPower += (army.count + army.morale);
-                }
+            // Clean up removed armies and orphaned armies (field doesn't reference them back)
+            if (army.remove || !army.field || army.field.army !== army) {
+                toDelete.push(key);
+                continue;
             }
+            const party = this.gameModel.parties[army.party];
+            if (party) {
+                party.armies.push(army);
+                party.totalCount += army.count;
+                party.totalPower += (army.count + army.morale);
+            }
+        }
+        
+        // Remove dead/orphaned armies from the global dict
+        for (const key of toDelete) {
+            delete this.gameModel.armies[key];
         }
     }
 

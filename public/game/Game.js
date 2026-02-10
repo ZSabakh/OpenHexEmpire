@@ -764,27 +764,39 @@ export class Game {
               }
 
               if (army) {
-                  // Step 1: Clear the source field (if it was attached)
-                  if (fromField.army === army) {
-                      fromField.army = null;
-                  }
+                  // Check if this is a join with overflow (remainder stays at source)
+                  const joinEvent = moveData.events ? moveData.events.find(e => e.type === 'join') : null;
+                  const hasRemainder = joinEvent && joinEvent.movingArmy && joinEvent.movingArmy.remainder > 0;
                   
-                  // Step 2: Update army reference
-                  army.field = toField;
-                  army.moved = true;
-                  
-                  // Step 3: Animate the movement
-                  Animations.animateMove(army, toField._x, toField._y, combatDelay);
-                  
-                  // Step 4: Place the army at destination if it wasn't removed
-                  // After combat: loser is marked for removal, winner stays
-                  // After join: moving army is marked for removal, target army stays at toField
-                  // After simple move: army just moves to empty toField
-                  if (!army.remove) {
-                      // Army survived (either won combat or moved to empty field)
-                      // The events have already been processed, so if this army wasn't removed,
-                      // it means it's the winner (or moved to empty field)
-                      toField.army = army;
+                  if (hasRemainder) {
+                      // Join with overflow: army stays at source field with remainder
+                      // Don't clear source field, don't move army to destination
+                      army.field = fromField;
+                      army.moved = true;
+                      // Animate partial move (move towards target then back)
+                      Animations.animateMove(army, toField._x, toField._y, combatDelay);
+                      // Keep army at source field
+                      fromField.army = army;
+                  } else {
+                      // Step 1: Clear the source field (if it was attached)
+                      if (fromField.army === army) {
+                          fromField.army = null;
+                      }
+                      
+                      // Step 2: Update army reference
+                      army.field = toField;
+                      army.moved = true;
+                      
+                      // Step 3: Animate the movement
+                      Animations.animateMove(army, toField._x, toField._y, combatDelay);
+                      
+                      // Step 4: Place the army at destination if it wasn't removed
+                      // After combat: loser is marked for removal, winner stays
+                      // After join: moving army is marked for removal, target army stays at toField
+                      // After simple move: army just moves to empty toField
+                      if (!army.remove) {
+                          toField.army = army;
+                      }
                   }
               }
 
@@ -929,10 +941,18 @@ export class Game {
           }
           
           if (movingArmy) {
-              movingArmy.remove = true;
-              movingArmy.remove_time = 24;
-              // Detach from grid immediately
-              if (movingArmy.field) movingArmy.field.army = null;
+              if (event.movingArmy.remainder > 0) {
+                  // Overflow: moving army keeps remainder at source field
+                  movingArmy.count = event.movingArmy.remainder;
+                  movingArmy.moved = true;
+                  // Army stays at its current field (source) - don't remove it
+              } else {
+                  // Full merge: remove the moving army
+                  movingArmy.remove = true;
+                  movingArmy.remove_time = 24;
+                  // Detach from grid immediately
+                  if (movingArmy.field) movingArmy.field.army = null;
+              }
           }
       } else if (event.type === 'annex') {
           
