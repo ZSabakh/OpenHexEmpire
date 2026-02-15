@@ -107,10 +107,14 @@ export class MapRender {
     // 1. Movable unit highlights
     this.drawMovableUnitHighlights(ctx, state);
 
-    // 2. Units
+    // 2. Estate icons (towns/ports) - drawn in dynamic layer because
+    //    their position depends on whether an army is present on the field
+    this.drawEstateIcons(ctx, state);
+
+    // 3. Units
     this.drawUnits(ctx, state);
     
-    // 3. Labels (Names & Stats)
+    // 4. Labels (Names & Stats)
     this.drawLabels(ctx, state, cursorPos);
   }
 
@@ -125,6 +129,50 @@ export class MapRender {
           this.drawHexTile(ctx, field._x, field._y, "rgba(255, 255, 0, 0.5)");
         }
       }
+    }
+  }
+
+  drawEstateIcons(ctx, state) {
+    const estates = this.cachedEstates || [];
+    
+    for (const field of estates) {
+        const xCenter = field._x;
+        const yCenter = field._y;
+
+        if (field.estate === "town") {
+          const isCapital = field.capital >= 0;
+          const cityImg = isCapital ? this.images["capital" + field.capital].img : this.images.city.img;
+          const w = 32;
+          const h = 32;
+          
+          if (!field.army) {
+            // No army: draw icon centered in the hex
+            ctx.drawImage(cityImg, xCenter - (w / 2), yCenter - (h / 2), w, h);
+          } else {
+            // Army present: draw icon smaller, offset to top-right corner
+            ctx.save();
+            ctx.translate(xCenter - (w / 2) + 17, yCenter - (h / 2) - 5);
+            ctx.scale(0.9, 0.9);
+            ctx.drawImage(cityImg, 0, 0, w, h);
+            ctx.restore();
+          }
+        } else if (field.estate === "port") {
+          const portImg = this.images.port.img;
+          const w = 32;
+          const h = 32;
+          
+          if (!field.army) {
+            // No army: draw icon centered in the hex
+            ctx.drawImage(portImg, xCenter - (w / 2), yCenter - (h / 2), w, h);
+          } else {
+            // Army present: draw icon smaller, offset to top-right corner
+            ctx.save();
+            ctx.translate(xCenter - (w / 2) + 25, yCenter - (h / 2) - 5);
+            ctx.scale(0.5, 0.5);
+            ctx.drawImage(portImg, 0, 0, w, h);
+            ctx.restore();
+          }
+        }
     }
   }
 
@@ -200,45 +248,6 @@ export class MapRender {
       }
      }
 
-     // Pass 3: Icons (Cities/Ports) - Drawn last to be on top
-     for (let x = 0; x < state.width; x++) {
-      for (let y = 0; y < state.height; y++) {
-        const field = state.getField(x, y);
-        const xCenter = field._x;
-        const yCenter = field._y;
-
-        if (field.estate === "town") {
-          const isCapital = field.capital >= 0;
-          const cityImg = isCapital ? this.images["capital" + field.capital].img : this.images.city.img;
-          const w = 32;
-          const h = 32;
-          
-          if (!field.army) {
-            ctx.drawImage(cityImg, xCenter - (w / 2), yCenter - (h / 2), w, h);
-          } else {
-            ctx.save();
-            ctx.translate(xCenter - (w / 2) + 17, yCenter - (h / 2) - 5);
-            ctx.scale(0.9, 0.9);
-            ctx.drawImage(cityImg, 0, 0, w, h);
-            ctx.restore();
-          }
-        } else if (field.estate === "port") {
-          const portImg = this.images.port.img;
-          const w = 32;
-          const h = 32;
-          
-          if (!field.army) {
-            ctx.drawImage(portImg, xCenter - (w / 2), yCenter - (h / 2), w, h);
-          } else {
-            ctx.save();
-            ctx.translate(xCenter - (w / 2) + 25, yCenter - (h / 2) - 5);
-            ctx.scale(0.5, 0.5);
-            ctx.drawImage(portImg, 0, 0, w, h);
-            ctx.restore();
-          }
-        }
-      }
-     }
   }
 
   drawTerritoryBorders(ctx, state) {
