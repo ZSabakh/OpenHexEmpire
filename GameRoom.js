@@ -3,6 +3,7 @@ import { MapGenerator } from './shared/MapGenerator.js';
 import { Pathfinder } from './shared/Pathfinder.js';
 import { Random } from './shared/Random.js';
 import { GameEngine } from './shared/GameEngine.js';
+import { GameRules } from './shared/GameRules.js';
 import { Bot } from './shared/Bot.js';
 
 export class GameRoom {
@@ -18,6 +19,9 @@ export class GameRoom {
         this.bot = null;
         this.maxPlayers = 4;
         this.gameStarted = false;
+        this.movesUsedThisTurn = 0;
+        this.maxMovesThisTurn = 0;
+        this.aiTurnInProgress = false;
         
         this.initializeGame();
     }
@@ -101,7 +105,29 @@ export class GameRoom {
         };
     }
 
-    setFactionSelection(partyId, playerName) {
+    setFactionSelection(partyId, playerName, socketId) {
+        // Validate faction selection
+        if (partyId < 0 || partyId >= this.gameModel.parties.length) {
+            return { success: false, error: 'Invalid faction ID' };
+        }
+        if (this.gameStarted) {
+            return { success: false, error: 'Game already started' };
+        }
+        if (this.factionSelections[partyId] && this.factionSelections[partyId] !== playerName) {
+            return { success: false, error: 'Faction already taken' };
+        }
+        // Check if this player already selected a different faction
+        if (socketId) {
+            const player = this.players.get(socketId);
+            if (player && player.partyId !== null && player.partyId !== partyId) {
+                // Clear old selection
+                delete this.factionSelections[player.partyId];
+                if (this.gameModel.parties[player.partyId]) {
+                    this.gameModel.parties[player.partyId].control = "computer";
+                }
+            }
+        }
+
         this.factionSelections[partyId] = playerName;
         
         // Mark this party as human-controlled in the game model
@@ -111,6 +137,7 @@ export class GameRoom {
         }
         
         console.log(`[GameRoom ${this.roomId}] Faction ${partyId} selected by ${playerName}`);
+        return { success: true };
     }
 
     getFactionSelections() {
@@ -286,6 +313,12 @@ export class GameRoom {
         // Cleanup turn for the current party (reset movement, decay morale)
         const cleanupUpdates = this.gameLogic.cleanupTurn(this.gameModel.turnParty);
 
+        // Calculate and track move points for this turn
+        this.gameLogic.syncPartyArmies();
+        const movableArmies = currentParty.armies.filter(a => !a.moved);
+        this.maxMovesThisTurn = GameRules.getMovePoints(movableArmies);
+        this.movesUsedThisTurn = 0;
+
         return {
             gameEnded: false,
             turn: this.gameModel.turn,
@@ -328,6 +361,17 @@ export class GameRoom {
 
         if (fromField.army.moved) {
             return { valid: false, error: 'Army has already moved' };
+        }
+
+        // Check move count limit
+        if (this.movesUsedThisTurn >= this.maxMovesThisTurn) {
+            return { valid: false, error: 'No moves remaining this turn' };
+        }
+
+        // Check reachability - target must be in possible moves from source
+        const possibleMoves = this.pathfinder.getPossibleMoves(fromField, true, false);
+        if (!possibleMoves.includes(toField)) {
+            return { valid: false, error: 'Target field is not reachable from source' };
         }
 
         return { valid: true, fromField, toField };

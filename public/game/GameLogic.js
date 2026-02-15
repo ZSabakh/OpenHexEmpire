@@ -134,7 +134,7 @@ export class GameLogic extends GameEngine {
         for (let x = 0; x < this.state.width; x++) {
             for (let y = 0; y < this.state.height; y++) {
                 const field = this.state.getField(x, y);
-                if (field && field.army && field.army.remove_time < 0) {
+                if (field && field.army && (field.army.remove_time === undefined || field.army.remove_time < 0)) {
                     const party = this.state.parties[field.army.party];
                     party.armies.push(field.army);
                     party.totalCount += field.army.count;

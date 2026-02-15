@@ -450,6 +450,11 @@ export class Game {
       
       // Logic
       if (this.isMultiplayer) {
+          // Immediately invalidate turn to prevent visual flash of spawned units appearing movable
+          this.state.turnParty = -1;
+          this.selectedArmy = null;
+          this.drawGame();
+          
           // DO NOT spawn units locally in multiplayer. Wait for server event.
           this.socketManager.endTurn(this.roomId);
       } else {
@@ -469,8 +474,7 @@ export class Game {
      }
      this.state.duel = (surviving < 3);
 
-     // Cleanup and update board before AI moves
-     this.logic.cleanupTurn();
+     // Update board before AI moves (cleanupTurn already called in nextTurn)
      this.logic.updateBoard();
 
      // Use shared TurnExecutor
@@ -513,10 +517,12 @@ export class Game {
     if (!mapStatus) return;
     
     let status = `<b>Map</b> ${this.mapNumber}, <b>Turn</b> ${this.state.turn + 1}`;
-    status += ` | Player: ${this.state.parties[this.state.turnParty].name}`;
-    
-    if (this.state.turnParty === this.state.humanPlayerId) {
-      status += ` | Moves: ${this.humanMovesLeft}`;
+    if (this.state.turnParty >= 0 && this.state.turnParty < this.state.parties.length) {
+      status += ` | Player: ${this.state.parties[this.state.turnParty].name}`;
+      
+      if (this.state.turnParty === this.state.humanPlayerId) {
+        status += ` | Moves: ${this.humanMovesLeft}`;
+      }
     }
     mapStatus.innerHTML = status;
   }
@@ -804,15 +810,22 @@ export class Game {
 
               this.logic.updateBoard();
               
-                  // SAFETY CHECK: Only decrement moves if this move belongs to the current turn party
+              // SAFETY CHECK: Only auto-end turn if this move belongs to the current turn party
                   // AND it's the human player's turn. This prevents race conditions where previous 
                   // player's animations are still processing when a new turn starts.
                   if (this.isMultiplayer && this.state.turnParty === this.state.humanPlayerId) {
-                      // Additional check: only decrement if the army that moved belongs to the current turn party
+                      // Additional check: only auto-end if the army that moved belongs to the current turn party
                       if (army && army.party === this.state.turnParty) {
                           // FIX: Do NOT decrement humanMovesLeft here. It was already decremented predictively in attemptMove.
                           
                           if (this.humanMovesLeft <= 0 || !this.checkHumanCanMove()) {
+                              // Immediately mark turn as ending to prevent visual flash of spawned units
+                              this.state.turnParty = -1; // Temporarily invalidate so highlights don't render
+                              this.selectedArmy = null;
+                              
+                              const topBarEndBtn = document.getElementById('topBarEndTurn');
+                              if (topBarEndBtn) topBarEndBtn.style.display = 'none';
+                              
                               this.socketManager.endTurn(this.roomId);
                           }
                       }

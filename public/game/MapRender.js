@@ -116,7 +116,7 @@ export class MapRender {
 
   drawMovableUnitHighlights(ctx, state) {
     // Draw yellow highlights for movable units
-    if (state.turnParty !== state.humanPlayerId) return;
+    if (state.turnParty < 0 || state.turnParty !== state.humanPlayerId) return;
     
     for (let x = 0; x < state.width; x++) {
       for (let y = 0; y < state.height; y++) {
