@@ -244,8 +244,16 @@ export class GameLogic extends GameEngine {
 
         // 2. HANDLE VISUALS (Animations based on what GameEngine returned)
         if (result.success) {
-            // Move Animation
-            Animations.animateMove(army, targetField._x, targetField._y);
+            const joinEvent = result.events.find(e => e.type === 'join');
+            const hasRemainder = joinEvent && joinEvent.movingArmy && joinEvent.movingArmy.remainder > 0;
+            
+            if (hasRemainder) {
+                if (!army.visual) {
+                    army.visual = { x: sourceField._x, y: sourceField._y };
+                }
+            } else {
+                Animations.animateMove(army, targetField._x, targetField._y);
+            }
             
             // Combat/Join Animations
             this.handleEventsVisuals(result.events, army, targetField);
@@ -300,8 +308,12 @@ export class GameLogic extends GameEngine {
                 const movingArmyRef = this.state.armies[event.movingArmy.id];
                 
                 if (movingArmyRef && targetArmy) {
-                    Animations.animateMerge(movingArmyRef, targetArmy);
-                    this.setArmyRemoval(movingArmyRef, targetArmy);
+                    if (event.movingArmy.remainder > 0) {
+                        Animations.animateMerge(null, targetArmy);
+                    } else {
+                        Animations.animateMerge(movingArmyRef, targetArmy);
+                        this.setArmyRemoval(movingArmyRef, targetArmy);
+                    }
                 }
             }
         }

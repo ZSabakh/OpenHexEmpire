@@ -14,42 +14,56 @@ export class Animations {
         if (typeof gsap === 'undefined') return;
 
         // Ensure visual objects exist
-        if (!movingArmy.visual) movingArmy.visual = { x: movingArmy.field._x, y: movingArmy.field._y };
+        if (movingArmy && !movingArmy.visual) movingArmy.visual = { x: movingArmy.field._x, y: movingArmy.field._y };
         if (!targetArmy.visual) targetArmy.visual = { x: targetArmy.field._x, y: targetArmy.field._y };
 
         // Create a timeline for the merge animation
         const tl = gsap.timeline();
 
-        // 1. Scale up both units slightly
-        tl.to([movingArmy.visual, targetArmy.visual], {
-            scale: Config.ANIMATION.MERGE_SCALE,
-            duration: Config.ANIMATION.MERGE_DURATION * 0.5,
-            ease: "back.out(2)"
-        }, 0);
+        if (movingArmy) {
+            // 1. Scale up both units slightly
+            tl.to([movingArmy.visual, targetArmy.visual], {
+                scale: Config.ANIMATION.MERGE_SCALE,
+                duration: Config.ANIMATION.MERGE_DURATION * 0.5,
+                ease: "back.out(2)"
+            }, 0);
 
-        // 2. Add a subtle rotation to the moving army
-        tl.to(movingArmy.visual, {
-            rotation: 360,
-            duration: Config.ANIMATION.MERGE_DURATION,
-            ease: "power2.inOut"
-        }, 0);
+            // 2. Add a subtle rotation to the moving army
+            tl.to(movingArmy.visual, {
+                rotation: 360,
+                duration: Config.ANIMATION.MERGE_DURATION,
+                ease: "power2.inOut"
+            }, 0);
 
-        // 3. Fade out the moving army while scaling back the target
-        tl.to(movingArmy.visual, {
-            opacity: 0,
-            duration: Config.ANIMATION.MERGE_DURATION * 0.5,
-            ease: "power2.in"
-        }, Config.ANIMATION.MERGE_DURATION * 0.5);
+            // 3. Fade out the moving army while scaling back the target
+            tl.to(movingArmy.visual, {
+                opacity: 0,
+                duration: Config.ANIMATION.MERGE_DURATION * 0.5,
+                ease: "power2.in"
+            }, Config.ANIMATION.MERGE_DURATION * 0.5);
 
-        // 4. Scale target back to normal with a bounce
-        tl.to(targetArmy.visual, {
-            scale: 1,
-            duration: Config.ANIMATION.MERGE_DURATION * 0.5,
-            ease: "elastic.out(1, 0.5)"
-        }, Config.ANIMATION.MERGE_DURATION * 0.5);
+            // 4. Scale target back to normal with a bounce
+            tl.to(targetArmy.visual, {
+                scale: 1,
+                duration: Config.ANIMATION.MERGE_DURATION * 0.5,
+                ease: "elastic.out(1, 0.5)"
+            }, Config.ANIMATION.MERGE_DURATION * 0.5);
 
-        // Reset properties after animation
-        tl.set(movingArmy.visual, { scale: 1, rotation: 0, opacity: 1 });
+            // Reset properties after animation
+            tl.set(movingArmy.visual, { scale: 1, rotation: 0, opacity: 1 });
+        } else {
+            tl.to(targetArmy.visual, {
+                scale: Config.ANIMATION.MERGE_SCALE,
+                duration: Config.ANIMATION.MERGE_DURATION * 0.5,
+                ease: "back.out(2)"
+            }, 0);
+
+            tl.to(targetArmy.visual, {
+                scale: 1,
+                duration: Config.ANIMATION.MERGE_DURATION * 0.5,
+                ease: "elastic.out(1, 0.5)"
+            }, Config.ANIMATION.MERGE_DURATION * 0.5);
+        }
     }
 
     /**

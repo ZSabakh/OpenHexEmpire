@@ -773,8 +773,10 @@ export class Game {
                       // Don't clear source field, don't move army to destination
                       army.field = fromField;
                       army.moved = true;
-                      // Animate partial move (move towards target then back)
-                      Animations.animateMove(army, toField._x, toField._y, combatDelay);
+                      // Keep army visually at source field - don't animate to destination
+                      if (!army.visual) {
+                          army.visual = { x: fromField._x, y: fromField._y };
+                      }
                       // Keep army at source field
                       fromField.army = army;
                   } else {
@@ -929,10 +931,6 @@ export class Game {
           
           const targetArmy = this.findArmyById(event.targetArmy.id);
           const movingArmy = this.findArmyById(event.movingArmy.id);
-          
-          if (movingArmy && targetArmy) {
-              Animations.animateMerge(movingArmy, targetArmy);
-          }
 
           if (targetArmy) {
               targetArmy.count = event.targetArmy.finalCount;
@@ -946,8 +944,13 @@ export class Game {
                   movingArmy.count = event.movingArmy.remainder;
                   movingArmy.moved = true;
                   // Army stays at its current field (source) - don't remove it
+                  if (targetArmy) {
+                      Animations.animateMerge(null, targetArmy);
+                  }
               } else {
-                  // Full merge: remove the moving army
+                  if (targetArmy) {
+                      Animations.animateMerge(movingArmy, targetArmy);
+                  }
                   movingArmy.remove = true;
                   movingArmy.remove_time = 24;
                   // Detach from grid immediately
