@@ -269,8 +269,11 @@ export class GameLogic extends GameEngine {
     logEvents(events) {
         for (const event of events) {
             if (event.type === 'combat') {
-                const winnerParty = this.state.parties[this.state.armies[event.winner].party].name;
-                const loserParty = this.state.parties[this.state.armies[event.loser].party].name;
+                const winnerIsAttacker = event.winner === event.attacker.id;
+                const winnerPartyId = winnerIsAttacker ? event.attacker.party : event.defender.party;
+                const loserPartyId = winnerIsAttacker ? event.defender.party : event.attacker.party;
+                const winnerParty = this.state.parties[winnerPartyId] ? this.state.parties[winnerPartyId].name : 'Unknown';
+                const loserParty = this.state.parties[loserPartyId] ? this.state.parties[loserPartyId].name : 'Unknown';
                 this.updateGameLog(`<span style="color:#ff5252">Combat:</span> ${winnerParty} defeated ${loserParty}`);
             } else if (event.type === 'annex') {
                 const partyName = this.state.parties[event.newParty].name;

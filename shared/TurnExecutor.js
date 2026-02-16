@@ -42,32 +42,56 @@ export class TurnExecutor {
         console.log(`[TurnExecutor] Party ${partyId} has ${movableArmies.length} movable armies, ${movePoints} move points`);
 
         let moveIndex = 0;
+        let aborted = false;
 
         const executeMove = () => {
+            // Check if aborted due to previous error
+            if (aborted) {
+                console.warn(`[TurnExecutor] AI turn aborted for party ${partyId} after error`);
+                onTurnComplete();
+                return;
+            }
+
             // Check if all moves are complete
             if (moveIndex >= movePoints) {
                 onTurnComplete();
                 return;
             }
 
-            // Calculate profitability for all movable armies
-            const profitability = bot.calcArmiesProfitability(partyId, gameModel);
+            try {
+                // Calculate profitability for all movable armies
+                const profitability = bot.calcArmiesProfitability(partyId, gameModel);
 
-            if (profitability.length > 0) {
-                // Sort by profitability, then by total power
-                profitability.sort((a, b) => {
-                    if (a.profitability > b.profitability) return -1;
-                    if (a.profitability < b.profitability) return 1;
-                    const aTotal = a.count + a.morale;
-                    const bTotal = b.count + b.morale;
-                    return bTotal - aTotal;
-                });
+                if (profitability.length > 0) {
+                    // Sort by profitability, then by total power
+                    profitability.sort((a, b) => {
+                        if (a.profitability > b.profitability) return -1;
+                        if (a.profitability < b.profitability) return 1;
+                        const aTotal = a.count + a.morale;
+                        const bTotal = b.count + b.morale;
+                        return bTotal - aTotal;
+                    });
 
-                const bestArmy = profitability[0];
-                const move = bestArmy.move;
+                    const bestArmy = profitability[0];
+                    const move = bestArmy.move;
 
-                // Execute the move via callback
-                onMoveExecute(bestArmy, move);
+                    if (move) {
+                        // Execute the move via callback
+                        onMoveExecute(bestArmy, move);
+                    } else {
+                        console.warn(`[TurnExecutor] No valid move for best army, skipping`);
+                    }
+                } else {
+                    // No movable armies left, end turn early
+                    console.log(`[TurnExecutor] No movable armies left for party ${partyId}, ending turn early`);
+                    onTurnComplete();
+                    return;
+                }
+            } catch (err) {
+                console.error(`[TurnExecutor] Error during AI move calculation for party ${partyId}:`, err.message);
+                aborted = true;
+                onTurnComplete();
+                return;
             }
 
             moveIndex++;

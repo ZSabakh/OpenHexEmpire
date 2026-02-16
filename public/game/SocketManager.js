@@ -122,6 +122,15 @@ export class SocketManager {
             window.dispatchEvent(new CustomEvent('unitsSpawned', { detail: data }));
         });
 
+        this.socket.on('full_resync', (data) => {
+            console.log('Full resync received from server');
+            window.dispatchEvent(new CustomEvent('fullResync', { detail: data }));
+        });
+
+        this.socket.on('resync_error', (data) => {
+            console.error('Resync error:', data.error);
+        });
+
         this.socket.on('disconnect', () => {
             console.log('Disconnected from server');
             this.connected = false;
@@ -212,6 +221,18 @@ export class SocketManager {
         }
 
         this.socket.emit('end_turn', {
+            roomId: roomId
+        });
+    }
+
+    requestResync(roomId) {
+        if (!this.connected) {
+            console.error('Not connected to server');
+            return;
+        }
+
+        console.warn('[SocketManager] Requesting full state resync from server');
+        this.socket.emit('request_resync', {
             roomId: roomId
         });
     }

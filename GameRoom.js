@@ -22,6 +22,9 @@ export class GameRoom {
         this.movesUsedThisTurn = 0;
         this.maxMovesThisTurn = 0;
         this.aiTurnInProgress = false;
+        this.turnEndInProgress = false;
+        this.lastActivityTime = Date.now();
+        this.inactivityTimeout = 30 * 60 * 1000; // 30 minutes
         
         this.initializeGame();
     }
@@ -113,10 +116,11 @@ export class GameRoom {
         if (this.gameStarted) {
             return { success: false, error: 'Game already started' };
         }
-        if (this.factionSelections[partyId] && this.factionSelections[partyId] !== playerName) {
+        
+        if (this.factionSelections[partyId] && this.factionSelections[partyId].socketId !== socketId) {
             return { success: false, error: 'Faction already taken' };
         }
-        // Check if this player already selected a different faction
+        
         if (socketId) {
             const player = this.players.get(socketId);
             if (player && player.partyId !== null && player.partyId !== partyId) {
@@ -128,7 +132,7 @@ export class GameRoom {
             }
         }
 
-        this.factionSelections[partyId] = playerName;
+        this.factionSelections[partyId] = { playerName, socketId };
         
         // Mark this party as human-controlled in the game model
         if (this.gameModel.parties[partyId]) {
@@ -141,7 +145,11 @@ export class GameRoom {
     }
 
     getFactionSelections() {
-        return this.factionSelections;
+        const selections = {};
+        for (const partyId in this.factionSelections) {
+            selections[partyId] = this.factionSelections[partyId].playerName;
+        }
+        return selections;
     }
 
     setPlayerReady(socketId, isReady) {
@@ -389,6 +397,14 @@ export class GameRoom {
         this.gameLogic.syncPartyArmies();
         
         return result;
+    }
+
+    touchActivity() {
+        this.lastActivityTime = Date.now();
+    }
+
+    isInactive() {
+        return (Date.now() - this.lastActivityTime) > this.inactivityTimeout;
     }
 
     getPlayerCount() {

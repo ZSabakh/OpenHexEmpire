@@ -9,6 +9,7 @@ import { Bot } from '../../shared/Bot.js';
 import { Animations } from './Animations.js';
 import { GameRules } from '../../shared/GameRules.js';
 import { TurnExecutor } from '../../shared/TurnExecutor.js';
+import { GameEngine } from '../../shared/GameEngine.js';
 
 export class Game {
 
@@ -29,6 +30,7 @@ export class Game {
     this.isMultiplayer = false;
     this.socketManager = null;
     this.roomId = null;
+    this.endTurnSent = false;
     
     // Action queue for handling server events sequentially
     this.actionQueue = [];
@@ -450,6 +452,10 @@ export class Game {
       
       // Logic
       if (this.isMultiplayer) {
+          // Prevent double end_turn emission
+          if (this.endTurnSent) return;
+          this.endTurnSent = true;
+          
           // Immediately invalidate turn to prevent visual flash of spawned units appearing movable
           this.state.turnParty = -1;
           this.selectedArmy = null;
@@ -819,14 +825,19 @@ export class Game {
                           // FIX: Do NOT decrement humanMovesLeft here. It was already decremented predictively in attemptMove.
                           
                           if (this.humanMovesLeft <= 0 || !this.checkHumanCanMove()) {
-                              // Immediately mark turn as ending to prevent visual flash of spawned units
-                              this.state.turnParty = -1; // Temporarily invalidate so highlights don't render
-                              this.selectedArmy = null;
-                              
-                              const topBarEndBtn = document.getElementById('topBarEndTurn');
-                              if (topBarEndBtn) topBarEndBtn.style.display = 'none';
-                              
-                              this.socketManager.endTurn(this.roomId);
+                              // Use endTurnSent guard to prevent double emission
+                              if (!this.endTurnSent) {
+                                  this.endTurnSent = true;
+                                  
+                                  // Immediately mark turn as ending to prevent visual flash of spawned units
+                                  this.state.turnParty = -1; // Temporarily invalidate so highlights don't render
+                                  this.selectedArmy = null;
+                                  
+                                  const topBarEndBtn = document.getElementById('topBarEndTurn');
+                                  if (topBarEndBtn) topBarEndBtn.style.display = 'none';
+                                  
+                                  this.socketManager.endTurn(this.roomId);
+                              }
                           }
                       }
                   }
@@ -1012,6 +1023,9 @@ export class Game {
       // This prevents race conditions where handleMoveExecuted checks turnParty while still processing previous player's moves
       this.queueAction({
           execute: () => {
+              // Reset end-turn guard for the new turn
+              this.endTurnSent = false;
+              
               this.state.turn = turnData.turn;
               this.state.turnParty = turnData.turnParty;
               
@@ -1049,6 +1063,24 @@ export class Game {
               
               this.logic.updateBoard();
 
+              // Desync detection: compare client state hash with server's
+              if (this.isMultiplayer && turnData.stateHash !== undefined) {
+                  const clientEngine = new GameEngine(this.state, this.pathfinder);
+                  clientEngine.syncPartyArmies();
+                  const clientHash = clientEngine.computeStateHash();
+                  
+                  if (clientHash !== turnData.stateHash) {
+                      console.error(`[DESYNC DETECTED] Client hash: ${clientHash}, Server hash: ${turnData.stateHash} at turn ${turnData.turn + 1}`);
+                      // Request full state resync from server
+                      if (this.socketManager) {
+                          this.socketManager.requestResync(this.roomId);
+                      }
+                      // Continue processing this turn anyway — resync will fix state when it arrives
+                  } else {
+                      console.log(`[Sync OK] Turn ${turnData.turn + 1} hash: ${clientHash}`);
+                  }
+              }
+
               const currentParty = this.state.parties[this.state.turnParty];
               
               
@@ -1062,20 +1094,20 @@ export class Game {
                       this.updateTopBar();
 
                       if (this.humanMovesLeft <= 0 || !this.checkHumanCanMove()) {
-                          this.socketManager.endTurn(this.roomId);
+                          this.endHumanTurn();
                           return;
                       }
                       
                       const endBtn = document.getElementById('endTurnButton');
                       if (endBtn) {
                           endBtn.style.display = 'inline-block';
-                          endBtn.onclick = () => this.socketManager.endTurn(this.roomId);
+                          endBtn.onclick = () => this.endHumanTurn();
                       }
                       
                       const topBarEndBtn = document.getElementById('topBarEndTurn');
                       if (topBarEndBtn) {
                           topBarEndBtn.style.display = 'inline-block';
-                          topBarEndBtn.onclick = () => this.socketManager.endTurn(this.roomId);
+                          topBarEndBtn.onclick = () => this.endHumanTurn();
                       }
                   } else {
                       
@@ -1118,6 +1150,40 @@ export class Game {
               }
           }
       });
+  }
+
+  handleFullResync(serverState) {
+      console.warn('[RESYNC] Applying full state resync from server...');
+      
+      // Clear action queue to prevent stale actions from executing
+      this.actionQueue = [];
+      this.isProcessingAction = false;
+      
+      // Clear all armies from fields and global dict
+      for (const key in this.state.armies) {
+          const army = this.state.armies[key];
+          if (army.field && army.field.army === army) {
+              army.field.army = null;
+          }
+      }
+      this.state.armies = {};
+      
+      // Clear all field ownership
+      for (const key in this.state.fields) {
+          this.state.fields[key].party = -1;
+          this.state.fields[key].army = null;
+      }
+      
+      // Re-apply dynamic state from server
+      this.applyDynamicState(serverState);
+      
+      // Update board
+      this.logic.updateBoard();
+      this.updateMapStatus();
+      this.updateTopBar();
+      this.drawGame();
+      
+      console.warn('[RESYNC] Full state resync complete');
   }
 
   setMultiplayerMode(socketManager, roomId) {

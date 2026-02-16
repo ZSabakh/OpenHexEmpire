@@ -291,6 +291,12 @@ $(function(){
     M.toast({html: `Turn error: ${error}`, classes: 'red'});
   });
 
+  window.addEventListener('fullResync', (e) => {
+    console.warn('Full resync received from server');
+    M.toast({html: 'State resynchronized with server', classes: 'orange'});
+    game.handleFullResync(e.detail);
+  });
+
   window.addEventListener('gameEnded', (e) => {
     const { reason, winnerPartyId } = e.detail;
     

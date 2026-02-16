@@ -85,12 +85,16 @@ function handleAITurn(roomId, gameRoom, io) {
                         io.to(roomId).emit('game_ended', { reason: 'Turn limit reached' });
                     }
                 } else {
+                gameRoom.gameLogic.syncPartyArmies();
+                    const stateHash = gameRoom.gameLogic.computeStateHash();
+                    
                     io.to(roomId).emit('new_turn', {
                         turn: turnResult.turn,
                         turnParty: turnResult.turnParty,
                         partyName: turnResult.partyName,
                         control: turnResult.control,
-                        moraleUpdates: turnResult.moraleUpdates
+                        moraleUpdates: turnResult.moraleUpdates,
+                        stateHash: stateHash
                     });
                     
                     // If next turn is also AI, handle it
@@ -292,12 +296,16 @@ io.on('connection', (socket) => {
                         });
                     }
                 } else {
+                    gameRoom.gameLogic.syncPartyArmies();
+                    const stateHash = gameRoom.gameLogic.computeStateHash();
+                    
                     io.to(roomId).emit('new_turn', {
                         turn: turnResult.turn,
                         turnParty: turnResult.turnParty,
                         partyName: turnResult.partyName,
                         control: turnResult.control,
-                        moraleUpdates: turnResult.moraleUpdates
+                        moraleUpdates: turnResult.moraleUpdates,
+                        stateHash: stateHash
                     });
                     
                     // If next turn is also AI, handle it
@@ -340,7 +348,8 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            // Increment move counter
+            // Track activity and increment move counter
+            gameRoom.touchActivity();
             gameRoom.movesUsedThisTurn++;
 
             const player = gameRoom.players.get(socket.id);
@@ -378,6 +387,12 @@ io.on('connection', (socket) => {
                 return;
             }
 
+            // Prevent double end_turn processing (race condition guard)
+            if (gameRoom.turnEndInProgress) {
+                console.warn(`[Server] Duplicate end_turn blocked for room ${roomId}`);
+                return;
+            }
+
             const player = gameRoom.players.get(socket.id);
             if (!player) {
                 socket.emit('turn_error', { error: 'Player not found' });
@@ -389,6 +404,7 @@ io.on('connection', (socket) => {
                 return;
             }
 
+            gameRoom.turnEndInProgress = true;
             console.log(`[Server] Player ${player.name} ended their turn in room ${roomId}`);
 
             // Spawn units for the CURRENT party (Ending Turn) BEFORE switching turns
@@ -400,6 +416,7 @@ io.on('connection', (socket) => {
             }
             
             const turnResult = gameRoom.nextTurn();
+            gameRoom.turnEndInProgress = false;
             
             if (turnResult.gameEnded) {
                 if (turnResult.reason === 'victory') {
@@ -418,12 +435,16 @@ io.on('connection', (socket) => {
                     }
                 }, 30000); // 30 second grace period
             } else {
+                gameRoom.gameLogic.syncPartyArmies();
+                const stateHash = gameRoom.gameLogic.computeStateHash();
+                
                 io.to(roomId).emit('new_turn', {
                     turn: turnResult.turn,
                     turnParty: turnResult.turnParty,
                     partyName: turnResult.partyName,
                     control: turnResult.control,
-                    moraleUpdates: turnResult.moraleUpdates
+                    moraleUpdates: turnResult.moraleUpdates,
+                    stateHash: stateHash
                 });
                 
                 if (turnResult.control === 'computer') {
@@ -432,7 +453,27 @@ io.on('connection', (socket) => {
             }
         } catch (err) {
             console.error(`[Server] Error in end_turn:`, err.message);
+            if (gameRoom) gameRoom.turnEndInProgress = false;
             socket.emit('turn_error', { error: 'Server error processing turn' });
+        }
+    });
+
+    socket.on('request_resync', (data) => {
+        try {
+            const roomId = data.roomId;
+            const gameRoom = gameRooms.get(roomId);
+            if (!gameRoom) {
+                socket.emit('resync_error', { error: 'Game room not found' });
+                return;
+            }
+            
+            console.log(`[Server] Resync requested by ${socket.id} for room ${roomId}`);
+            
+            // Send full game state to the requesting client
+            socket.emit('full_resync', gameRoom.getGameState());
+        } catch (err) {
+            console.error(`[Server] Error in request_resync:`, err.message);
+            socket.emit('resync_error', { error: 'Server error during resync' });
         }
     });
 
@@ -456,6 +497,16 @@ io.on('connection', (socket) => {
         }
     });
 });
+
+// Periodic cleanup of inactive game rooms (every 5 minutes)
+setInterval(() => {
+    for (const [roomId, gameRoom] of gameRooms.entries()) {
+        if (gameRoom.isInactive()) {
+            console.log(`[Server] Room ${roomId} cleaned up due to inactivity (${Math.round(gameRoom.inactivityTimeout / 60000)} min timeout)`);
+            gameRooms.delete(roomId);
+        }
+    }
+}, 5 * 60 * 1000);
 
 server.listen(app.get('port'), function(){
     console.log('OpenHexEmpire is listening on port ' + app.get('port'));

@@ -219,6 +219,8 @@ export class GameEngine {
         // Auto-annex empty neighbours
         for (const n of field.neighbours) {
             if (n && n.type === "land" && !n.estate && !n.army && n.party !== partyId) {
+                const oldNeighborParty = n.party;
+                
                 if (n.party !== partyId) {
                      const earnedN = GameRules.calculateMoraleEarned(partyId, n);
                      const moraleUpdateN = this.addMoraleForAll(earnedN[0], partyId);
@@ -230,7 +232,7 @@ export class GameEngine {
                 events.push({
                     type: 'annex',
                     field: { fx: n.fx, fy: n.fy },
-                    oldParty: n.party,
+                    oldParty: oldNeighborParty,
                     newParty: partyId
                 });
             }
@@ -386,9 +388,13 @@ export class GameEngine {
         // Reset lists
         for (const party of this.gameModel.parties) {
             party.armies = [];
+            party.towns = [];
             party.totalCount = 0;
             party.totalPower = 0;
         }
+        
+        // Reset global town list
+        this.gameModel.allTowns = [];
         
         const toDelete = [];
         for (const key in this.gameModel.armies) {
@@ -409,6 +415,20 @@ export class GameEngine {
         // Remove dead/orphaned armies from the global dict
         for (const key of toDelete) {
             delete this.gameModel.armies[key];
+        }
+        
+        // Scan fields for town ownership (used by Bot AI)
+        for (const key in this.gameModel.fields) {
+            const field = this.gameModel.fields[key];
+            if (field.estate === "town" || field.estate === "port") {
+                this.gameModel.allTowns.push(field);
+                if (field.party >= 0) {
+                    const party = this.gameModel.parties[field.party];
+                    if (party) {
+                        party.towns.push(field);
+                    }
+                }
+            }
         }
     }
 
@@ -491,6 +511,36 @@ export class GameEngine {
         }
         
         return events;
+    }
+
+    /**
+     * Compute a lightweight state hash for desync detection.
+     * Hashes: turn, turnParty, army count per party, total field ownership counts.
+     */
+    computeStateHash() {
+        let hash = 0;
+        const addToHash = (val) => {
+            hash = ((hash << 5) - hash + val) | 0;
+        };
+        
+        addToHash(this.gameModel.turn);
+        addToHash(this.gameModel.turnParty);
+        
+        // Army counts and total power per party
+        for (const party of this.gameModel.parties) {
+            addToHash(party.armies.length);
+            addToHash(party.totalCount);
+            addToHash(party.status);
+        }
+        
+        // Total army count in global dict
+        let totalArmies = 0;
+        for (const key in this.gameModel.armies) {
+            totalArmies++;
+        }
+        addToHash(totalArmies);
+        
+        return hash;
     }
 
     /**
