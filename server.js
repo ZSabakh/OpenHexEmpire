@@ -16,6 +16,6 @@ var homepage = function(req, res) {
 
 app.get('/', homepage);
 
-server.listen(app.get('port'), function(){
+server.listen(app.get('port'), "0.0.0.0", function(){
     console.log('OpenHexEmpire is listening on port ' + app.get('port'));
 });
