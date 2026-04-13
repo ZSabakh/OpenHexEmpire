@@ -555,10 +555,10 @@ export class MapRender {
   drawHexOutline(ctx, xCenter, yCenter, borderColor, borderWidth) {
     ctx.beginPath();
     ctx.moveTo(xCenter - 12.5, yCenter - 20);
-    ctx.lineTo(xCenter - 24, yCenter - 0);
+    ctx.lineTo(xCenter - 25, yCenter - 0);
     ctx.lineTo(xCenter - 12.5, yCenter + 20);
     ctx.lineTo(xCenter + 12.5, yCenter + 20);
-    ctx.lineTo(xCenter + 24, yCenter + 0);
+    ctx.lineTo(xCenter + 25, yCenter + 0);
     ctx.lineTo(xCenter + 12.5, yCenter - 20);
     ctx.closePath();
     ctx.strokeStyle = borderColor;

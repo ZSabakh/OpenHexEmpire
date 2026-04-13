@@ -38,6 +38,7 @@ export class Game {
 
     this.lastTime = 0;
     this.animFrameId = null;
+    this.dynamicDirty = true;
     this.loop = this.loop.bind(this);
   }
 
@@ -46,7 +47,18 @@ export class Game {
       if (this.logic) {
         this.logic.tick();
       }
-      this.drawGame();
+      const hasActiveAnimations =
+        typeof gsap !== "undefined" &&
+        gsap.globalTimeline.getChildren(true, true, false).length > 0;
+      if (
+        this.dynamicDirty ||
+        hasActiveAnimations ||
+        this.mapRender.territoryDirty ||
+        this.mapRender.staticNeedsRedraw
+      ) {
+        this.drawGame();
+        this.dynamicDirty = false;
+      }
     }
     this.animFrameId = requestAnimationFrame(this.loop);
   }
@@ -503,6 +515,7 @@ export class Game {
       // Immediately invalidate turn to prevent visual flash of spawned units appearing movable
       this.state.turnParty = -1;
       this.selectedArmy = null;
+      this.dynamicDirty = true;
       this.drawGame();
 
       // DO NOT spawn units locally in multiplayer. Wait for server event.
@@ -511,6 +524,7 @@ export class Game {
       // Single Player: Do local logic
       this.logic.spawnUnits(this.state.humanPlayerId);
       this.selectedArmy = null;
+      this.dynamicDirty = true;
       this.drawGame();
       this.nextTurn();
     }
@@ -541,6 +555,7 @@ export class Game {
       onTurnComplete: () => {
         // Spawn units and proceed to next turn
         this.logic.spawnUnits(partyId);
+        this.dynamicDirty = true;
         this.drawGame();
         setTimeout(() => this.nextTurn(), 200);
       },
@@ -611,6 +626,7 @@ export class Game {
     } else {
       this.hoveredField = null;
     }
+    this.dynamicDirty = true;
     // drawGame() removed — the render loop already runs at 60fps
   }
 
@@ -652,6 +668,7 @@ export class Game {
       } else {
         this.selectedArmy = field.army;
       }
+      this.dynamicDirty = true;
       this.drawGame();
       return;
     }
@@ -659,6 +676,7 @@ export class Game {
     // Deselect if clicking empty field
     if (this.selectedArmy) {
       this.selectedArmy = null;
+      this.dynamicDirty = true;
       this.drawGame();
     }
   }
@@ -680,6 +698,7 @@ export class Game {
 
       // Deselect for UI responsiveness
       this.selectedArmy = null;
+      this.dynamicDirty = true;
       this.drawGame();
     } else {
       // SINGLE PLAYER: Execute move locally
@@ -691,6 +710,7 @@ export class Game {
         this.updateMapStatus();
         this.updateTopBar();
         this.logic.updateBoard();
+        this.dynamicDirty = true;
         this.drawGame();
 
         // Check victory condition
@@ -744,6 +764,7 @@ export class Game {
         this.actionQueue.shift().execute();
       }
       this.isProcessingAction = false;
+      this.dynamicDirty = true;
       this.drawGame();
       return;
     }
@@ -942,6 +963,7 @@ export class Game {
 
         this.updateMapStatus();
         this.updateTopBar();
+        this.dynamicDirty = true;
         this.drawGame();
       },
     });
@@ -1006,6 +1028,7 @@ export class Game {
             }
           }
         }
+        this.dynamicDirty = true;
         this.drawGame();
       },
     });
@@ -1331,6 +1354,7 @@ export class Game {
     this.logic.updateBoard();
     this.updateMapStatus();
     this.updateTopBar();
+    this.dynamicDirty = true;
     this.drawGame();
 
     console.warn("[RESYNC] Full state resync complete");
@@ -1677,6 +1701,7 @@ export class Game {
       if (topBarEndTurn) topBarEndTurn.style.display = "none";
 
       this.selectedArmy = null;
+      this.dynamicDirty = true;
       this.drawGame();
       this.nextTurn();
     }
