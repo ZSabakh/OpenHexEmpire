@@ -1,14 +1,11 @@
 import { Config } from './Config.js';
 
-export class GameState {
+export class GameModel {
     constructor() {
         this.width = Config.MAP.WIDTH;
         this.height = Config.MAP.HEIGHT;
         this.hexWidth = Config.MAP.HEX_WIDTH;
         this.hexHeight = Config.MAP.HEX_HEIGHT;
-
-        this.pixelWidth = Math.ceil((this.width - 1) * (this.hexWidth * 0.75) + this.hexWidth);
-        this.pixelHeight = (this.height - 1) * this.hexHeight + this.hexHeight + (this.hexHeight / 2);
 
         // Key: "f{x}x{y}" -> Field object
         // Field object structure:
@@ -47,15 +44,8 @@ export class GameState {
         this.difficulty = 5;
         this.duel = false; // True if < 3 parties left
         
-        this.peace = -1; // Party ID we have a pact with
-        this.pactJustBroken = -1;
-
         this.humanCondition = 1;
         this.isSpectating = false; // True when player is defeated and watching AI battle
-
-        // Canvases
-        this.backgroundCanvas = null;
-        this.seaCanvas = null;
         
         // Armies Map (Key: "army{id}" -> Army Object)
         this.armies = {}; 
@@ -67,7 +57,7 @@ export class GameState {
     }
 
     getField(x, y) {
-        return this.fields[`f${x}x${y}`];
+        return this.fields[`f${x}x${y}`] || null;
     }
 
     setField(x, y, field) {
