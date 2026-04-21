@@ -622,6 +622,6 @@ setInterval(
   5 * 60 * 1000,
 );
 
-server.listen(app.get("port"), function () {
-  console.log("OpenHexEmpire is listening on port " + app.get("port"));
+server.listen(app.get('port'), "0.0.0.0", function(){
+    console.log('OpenHexEmpire is listening on port ' + app.get('port'));
 });
