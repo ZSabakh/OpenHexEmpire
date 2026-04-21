@@ -1,603 +1,446 @@
-import { Config } from './Config.js';
-import { Animations } from './Animations.js';
+import { Config } from "../../shared/Config.js";
+import { Animations } from "./Animations.js";
+import { GameRules } from "../../shared/GameRules.js";
+import { GameEngine } from "../../shared/GameEngine.js";
 
-export class GameLogic {
-    constructor(gameState, pathfinder, bot) {
-        this.state = gameState;
-        this.pathfinder = pathfinder;
-        this.bot = bot;
+/**
+ * GameLogic - Client-side game logic with visual effects
+ * This class extends GameEngine and adds visual/animation concerns for single-player mode
+ * In multiplayer mode, this class should NOT be used for state modifications
+ */
+export class GameLogic extends GameEngine {
+  constructor(gameState, pathfinder, bot) {
+    super(gameState, pathfinder);
+    this.state = gameState;
+    this.bot = bot;
+  }
+
+  resetGameLog() {
+    const gamelogElement = document.getElementById("gamelog");
+    if (gamelogElement) gamelogElement.innerHTML = "";
+  }
+
+  updateGameLog(message) {
+    const gamelogElement = document.getElementById("gamelog");
+    if (gamelogElement) {
+      const entry = document.createElement("div");
+      entry.innerHTML = message;
+      gamelogElement.appendChild(entry);
+      // Cap log size to prevent unbounded DOM growth
+      while (gamelogElement.childElementCount > 200) {
+        gamelogElement.removeChild(gamelogElement.firstChild);
+      }
+      gamelogElement.scrollTop = gamelogElement.scrollHeight;
+    }
+  }
+
+  // Client-specific tick for visual cleanup
+  tick() {
+    for (const key in this.state.armies) {
+      const army = this.state.armies[key];
+      if (army.remove_time > 0) {
+        army.remove_time--;
+        if (army.remove_time === 0) {
+          this.deleteArmy(army);
+          delete this.state.armies[key];
+        }
+      }
+    }
+  }
+
+  cleanupTurn() {
+    // Call parent to handle state changes
+    return super.cleanupTurn(this.state.turnParty);
+  }
+
+  updateBoard() {
+    // Signal to renderer that territory may have changed
+    if (this.onTerritoryChanged) this.onTerritoryChanged();
+
+    // 1. Cleanup Dead Armies (Visual)
+    this.cleanupArmies();
+
+    // 2. Re-list armies (Syncs with Engine state)
+    this.listArmies();
+
+    // 3. Update Party Statuses
+    let statusEvents = [];
+    if (this.state.isMultiplayer) {
+      // MULTIPLAYER FIX:
+      // We MUST update the status (Alive/Dead) locally so the UI knows if we lost.
+      // But we MUST NOT transfer lands or disband armies locally (wait for server events).
+      for (const party of this.state.parties) {
+        this.checkPartyStatus(party); // This function is in GameEngine, safe to call
+      }
+    } else {
+      statusEvents = super.updatePartyStatuses();
+
+      // Handle visual effects for disbanded armies (Single Player only)
+      for (const event of statusEvents) {
+        if (event.type === "army_disbanded") {
+          const army = this.state.armies[event.armyId];
+          if (army) {
+            Animations.animateExplosion(army);
+            this.setExplosion(army, army, null);
+            this.updateGameLog(
+              `Disbanded ${this.state.parties[event.party].name} army at (${event.field.fx}, ${event.field.fy})`,
+            );
+          }
+        }
+      }
     }
 
-    resetGameLog() {
-        const gamelogElement = document.getElementById('gamelog');
-        if (gamelogElement) gamelogElement.innerHTML = "";
+    // 4. Update Party Territories & Morale
+    for (const party of this.state.parties) {
+      party.towns = [];
+      party.ports = [];
+      party.lands = [];
     }
 
-    updateGameLog(message) {
-        const gamelogElement = document.getElementById('gamelog');
-        if (gamelogElement) gamelogElement.innerHTML += message + "<br/>";
+    for (let x = 0; x < this.state.width; x++) {
+      for (let y = 0; y < this.state.height; y++) {
+        const field = this.state.getField(x, y);
+        if (!field) continue;
+
+        this.updateFieldVisuals(field);
+
+        // Add to lists
+        if (field.party >= 0) {
+          const p = this.state.parties[field.party];
+          if (field.estate === "town") p.towns.push(field);
+          else if (field.estate === "port") p.ports.push(field);
+          else p.lands.push(field);
+        }
+      }
     }
 
-    tick() {
-         for (const key in this.state.armies) {
-             const army = this.state.armies[key];
-             if (army.remove_time > 0) {
-                 army.remove_time--;
-                 if (army.remove_time === 0) {
-                     this.deleteArmy(army);
-                     delete this.state.armies[key];
-                 }
-             }
-         }
-    }
-
-    // --- Turn Management ---
-
-    cleanupTurn() {
-        const party = this.state.parties[this.state.turnParty];
-        for (const army of party.armies) {
-            if (army.moved) {
-                army.moved = false;
-            } else {
-                army.morale--;
-            }
-        }
-    }
-
-    updateBoard() {
-        // 0. Cleanup Dead Armies
-        this.cleanupArmies();
-
-        // 1. Re-list armies from fields (sync source of truth)
-        this.listArmies();
-
-        // 2. Check Party Status (Capital Control)
-        for (const party of this.state.parties) {
-            this.checkPartyState(party);
-        }
-
-        // 3. Update Party Territories & Morale
-        for (const party of this.state.parties) {
-            party.towns = [];
-            party.ports = [];
-            party.lands = [];
-        }
-
-        for (let x = 0; x < this.state.width; x++) {
-            for (let y = 0; y < this.state.height; y++) {
-                const field = this.state.getField(x, y);
-                this.updateFieldVisuals(field); 
-
-                // 1. Transfer Land Ownership if Faction is Dead
-                if (field.party >= 0) {
-                    let landOwner = this.state.parties[field.party];
-                    // Recursively resolve ownership if the owner is dead (and doesn't own their capital)
-                    // We loop until we find a living owner or the ultimate conqueror
-                    while (landOwner.status === 0 && landOwner.capital.party !== landOwner.id) {
-                         const nextOwnerId = landOwner.capital.party;
-                         // Cycle protection
-                         if (nextOwnerId === landOwner.id || nextOwnerId === field.party) break; 
-                         
-                         landOwner = this.state.parties[nextOwnerId];
-                    }
-                    
-                    if (field.party !== landOwner.id) {
-                        field.party = landOwner.id;
-                    }
-                }
-
-                // 2. Disband Armies of Dead Factions
-                if (field.army) {
-                    const armyPartyId = field.army.party;
-                    if (this.state.parties[armyPartyId].status === 0) {
-                        Animations.animateExplosion(field.army); // Add visual animation
-                        this.setExplosion(field.army, field.army, null);
-                        this.updateGameLog(`Disbanded ${this.state.parties[armyPartyId].name} army at (${field.fx}, ${field.fy})`);
-                        // field.army will be removed by cleanupArmies in next tick
-                    }
-                }
-
-                // 3. Add to lists (using new owner)
-                if (field.party >= 0) {
-                    const p = this.state.parties[field.party];
-                    if (field.estate === "town") p.towns.push(field);
-                    else if (field.estate === "port") p.ports.push(field);
-                    else p.lands.push(field);
-                }
-            }
-        }
-
-        // 4. Update Party Morale
-        for (const party of this.state.parties) {
-            let morale = 0;
-            if (party.armies.length > 0) {
-                for (const army of party.armies) {
-                    // Min morale check
-                    const minMorale = Math.floor(party.totalCount / 50);
-                    if (army.morale < minMorale) army.morale = minMorale;
-                    if (army.morale > army.count) army.morale = army.count;
-                    
-                    morale += army.morale;
-                }
-                morale = Math.floor(morale / party.armies.length);
-            } else {
-                morale = 10;
-            }
-            party.morale = morale;
-        }
-
-        // 5. Update Human Condition
-        this.updateHumanCondition();
-    }
-
-    listArmies() {
-        // Reset lists
-        for (const party of this.state.parties) {
-            party.armies = [];
-            party.totalCount = 0;
-            party.totalPower = 0;
-        }
-
-        for (let x = 0; x < this.state.width; x++) {
-            for (let y = 0; y < this.state.height; y++) {
-                const field = this.state.getField(x, y);
-                if (field.army && field.army.remove_time < 0) {
-                    const party = this.state.parties[field.army.party];
-                    party.armies.push(field.army);
-                    party.totalCount += field.army.count;
-                    party.totalPower += (field.army.count + field.army.morale);
-                }
-            }
-        }
-    }
-
-    cleanupArmies() {
-        for (const key in this.state.armies) {
-            const army = this.state.armies[key];
-            
-            if (army.remove && army.remove_time < 0) {
-                // Remove from waiting lists
-                if (army.waiting) army.waiting.is_waiting = false;
-                
-                this.deleteArmy(army);
-                delete this.state.armies[key];
-            }
-        }
-    }
-
-    deleteArmy(army) {
-        if (army.field.army === army) {
-            army.field.army = null;
-        }
-    }
-
-    checkPartyState(party) {
-        // If game just started, skip
-        // In GameState, we might need an 'init' flag or check turns
-        
-        // Logic:
-        // 0: Dead (Capital taken by someone else)
-        // 1: Alive (Owns Capital)
-        // >1: Alive + Controls other capitals
-
-        const capitalField = party.capital;
-        if (capitalField.party !== party.id) {
-            party.status = 0;
-            party.provincesCp = null;
-            return;
-        }
-
-        // Check other capitals
-        const otherCapitals = [];
-        for (const otherP of this.state.parties) {
-            if (otherP.id !== party.id && otherP.capital.party === party.id) {
-                // Check if other party is eliminated (no armies)
-                // Actually original logic: "&& !board.hw_parties_armies[p].length"
-                if (otherP.armies.length === 0) {
-                    otherCapitals.push(otherP.capital);
-                }
-            }
-        }
-
-        if (otherCapitals.length > 0) {
-            party.status = 1 + otherCapitals.length;
-            party.provincesCp = otherCapitals;
-        } else {
-            party.status = 1;
-            party.provincesCp = null;
-        }
-    }
-
-    updateHumanCondition() {
-        const humanParty = this.state.parties[this.state.humanPlayerId];
-        if (!humanParty) return;
-
-        const humanTotalPower = humanParty.morale + humanParty.totalCount;
-        let condition = 1;
-
-        for (const party of this.state.parties) {
-            if (party.id !== this.state.humanPlayerId && party.status > 0) {
-                const enemyPower = party.morale + party.totalCount;
-                if (humanTotalPower < 0.3 * enemyPower) {
-                    condition = 3;
-                } else if (condition < 3 && humanTotalPower < 0.6 * enemyPower) {
-                    condition = 2;
-                } else if (humanParty.provincesCp && humanParty.provincesCp.length >= 2 && humanTotalPower > 2 * enemyPower) {
-                    condition = 0;
-                }
-            }
-        }
-        this.state.humanCondition = condition;
-    }
-
-    updateFieldVisuals(field) {
-        // This mirrors updateField in Map.js - mostly for visual properties
-        // We can simplify this or move to Render, but state might need it for logic?
-        // Actually it sets _visible flags on sub-objects. 
-        // We can just rely on field.estate
-    }
-
-    // --- Movement & Combat ---
-
-    makeMove(partyId) {
-        // Helper for AI turn
-        const profitability = this.bot.calcArmiesProfitability(partyId, this.state);
-        // Sort logic is inside bot or here?
-        // Original: profitability.sort(orderArmies)
-        
-        profitability.sort((a, b) => {
-            if (a.profitability > b.profitability) return -1;
-            if (a.profitability < b.profitability) return 1;
-            const aTotal = a.count + a.morale;
-            const bTotal = b.count + b.morale;
-            return bTotal - aTotal;
-        });
-
-        if (profitability.length === 0) return;
-
-        const bestArmy = profitability[0];
-        const move = bestArmy.move;
-        const party = this.state.parties[partyId];
-
-        if (!move.wait_for_support) {
-            party.waitForSupportField = null;
-            party.waitForSupportCount = 0;
-            this.moveArmy(bestArmy, move);
-        } else {
-             if (move === party.waitForSupportField) {
-                 party.waitForSupportCount++;
-             } else {
-                 party.waitForSupportField = move;
-                 party.waitForSupportCount = 0;
-             }
-             
-             // Check support
-             const supportArmies = this.bot.supportArmy(partyId, bestArmy, move, this.state);
-             if (supportArmies.length > 0) {
-                 // Sort support armies
-                 supportArmies.sort((a, b) => b.tmp_prof - a.tmp_prof);
-                 this.moveArmy(supportArmies[0], supportArmies[0].move);
-             } else {
-                 this.moveArmy(bestArmy, move);
-             }
-        }
-    }
-
-    moveArmy(army, targetField) {
-        const sourceField = army.field;
-        this.updateGameLog(`${this.state.parties[army.party].name} moved unit from (${sourceField.fx},${sourceField.fy}) to (${targetField.fx},${targetField.fy})`);
-
-        // Animate army movement
-        Animations.animateMove(army, targetField._x, targetField._y);
-
-        // Pact check
-        if (this.state.peace >= 0) {
-            if ((targetField.party === this.state.peace && army.party === this.state.humanPlayerId) ||
-                (army.party === this.state.peace && targetField.party === this.state.humanPlayerId)) {
-                this.addMoraleForAll(30, targetField.party);
-                this.state.pactJustBroken = this.state.peace;
-                this.state.peace = -1;
-            }
-        }
-
-        army.field.army = null;
-        army.field = targetField;
-        army.moved = true;
-        
-        // Update pixel position immediately? Or let render handle interpolation?
-        // For now instant update to match logic
-        // army._x = targetField._x ... (Render does this)
-
-        if (targetField.army && targetField.party !== army.party) {
-            // Attack
-            if (!this.attack(army, targetField)) {
-                this.updateBoard();
-                return false;
-            }
-        } else if (targetField.army && targetField.party === army.party) {
-            // Join - Animate merge effect
-            Animations.animateMerge(army, targetField.army);
-            
-            if (targetField.army.count + army.count <= Config.UNITS.MAX_COUNT) {
-                this.joinUnits(army.count, army.morale, army.party, targetField.army);
-            } else {
-                const space = Config.UNITS.MAX_COUNT - targetField.army.count;
-                const leftover = army.count - space;
-                // Fill target
-                this.joinUnits(space, army.morale, army.party, targetField.army);
-                // Leave rest in source
-                this.joinUnits(leftover, army.morale, army.party, null, sourceField);
-            }
-            this.setArmyRemoval(army, targetField.army);
-            targetField.army.moved = true;
-            this.annexLand(army.party, targetField, false);
-            this.updateBoard();
-            return true;
-        }
-
-        targetField.army = army;
-        this.annexLand(army.party, targetField, false);
-        this.updateBoard();
-        return true;
-    }
-
-    attack(attacker, field) {
-        const defender = field.army;
-        if (!defender) return true;
-
-        const attPower = attacker.count + attacker.morale;
-        const defPower = defender.count + defender.morale;
-
-        // Animate attack sequence
-        Animations.animateAttack(attacker, defender);
-
-        if (attPower > defPower) {
-            // Attacker Wins
-            this.addMoraleForAll(-Math.floor(defender.count / 10), defender.party);
-            
-            // Calculate losses
-            const ratio = defPower / attPower;
-            let losses = Math.floor(ratio * attacker.count);
-            attacker.count -= losses;
-            if (attacker.count <= 0) attacker.count = 1;
-            
-            if (attacker.morale > attacker.count) attacker.morale = attacker.count;
-
-            Animations.animateExplosion(defender);
-            this.setExplosion(attacker, defender, attacker);
-            return true;
-        } else {
-            // Defender Wins
-            this.addMoraleForAll(-Math.floor(attacker.count / 10), attacker.party);
-            
-            const ratio = attPower / defPower;
-            let losses = Math.floor(ratio * defender.count);
-            defender.count -= losses;
-            if (defender.count <= 0) defender.count = 1;
-
-            if (defender.morale > defender.count) defender.morale = defender.count;
-
-            Animations.animateExplosion(attacker);
-            this.setExplosion(attacker, attacker, defender);
-            return false;
-        }
-    }
-
-    joinUnits(count, morale, partyId, targetArmy, targetField) {
-        // targetArmy OR targetField must be provided
-        if (!targetArmy && targetField) targetArmy = targetField.army;
-        if (!targetArmy && !targetField) return; // Error
-
-        if (!targetArmy) {
-            // Create new army at targetField
-            if (count <= 0) return;
-            
-            const army = {
-                id: `army${this.state.armyIdCounter++}`,
-                field: targetField,
-                party: partyId,
-                count: count > Config.UNITS.MAX_COUNT ? Config.UNITS.MAX_COUNT : count,
-                morale: morale,
-                moved: false,
-                remove: false,
-                remove_time: -1,
-                exploding: null,
-                waiting: null,
-                is_waiting: false,
-                _x: targetField._x,
-                _y: targetField._y,
-                visual: { x: targetField._x, y: targetField._y }
-            };
+    // 5. Update Party Morale
+    // In single-player: Calculate morale locally
+    // In multiplayer: Server sends morale values, don't overwrite them
+    if (!this.state.isMultiplayer) {
+      for (const party of this.state.parties) {
+        let morale = 0;
+        if (party.armies.length > 0) {
+          for (const army of party.armies) {
+            const minMorale = Math.floor(party.totalCount / 50);
+            if (army.morale < minMorale) army.morale = minMorale;
             if (army.morale > army.count) army.morale = army.count;
-            if (army.morale < 0) army.morale = 0;
-
-            targetField.army = army;
-            this.state.armies[army.id] = army;
+            morale += army.morale;
+          }
+          morale = Math.floor(morale / party.armies.length);
         } else {
-            // Merge into existing
-             const newCount = targetArmy.count + count;
-             const newMorale = Math.floor((targetArmy.count * targetArmy.morale + count * morale) / newCount);
-             
-             targetArmy.count = newCount > Config.UNITS.MAX_COUNT ? Config.UNITS.MAX_COUNT : newCount;
-             targetArmy.morale = newMorale;
-             if (targetArmy.morale > targetArmy.count) targetArmy.morale = targetArmy.count;
+          morale = 10;
         }
+        party.morale = morale;
+      }
     }
 
-    setExplosion(attacking, exploding, waiting) {
-        attacking.exploding = exploding;
-        exploding.remove_time = 36; 
-        if (waiting) {
-            attacking.waiting = waiting;
-            waiting.is_waiting = true;
-        }
+    this.updateHumanCondition();
+  }
+
+  listArmies() {
+    for (const party of this.state.parties) {
+      party.armies = [];
+      party.totalCount = 0;
+      party.totalPower = 0;
     }
 
-    setArmyRemoval(army, waiting) {
-        army.remove = true;
-        army.remove_time = 24;
-        if (waiting) {
-            army.waiting = waiting;
-            waiting.is_waiting = true;
+    for (let x = 0; x < this.state.width; x++) {
+      for (let y = 0; y < this.state.height; y++) {
+        const field = this.state.getField(x, y);
+        if (
+          field &&
+          field.army &&
+          (field.army.remove_time === undefined || field.army.remove_time < 0)
+        ) {
+          const party = this.state.parties[field.army.party];
+          party.armies.push(field.army);
+          party.totalCount += field.army.count;
+          party.totalPower += field.army.count + field.army.morale;
         }
+      }
+    }
+  }
+
+  cleanupArmies() {
+    for (const key in this.state.armies) {
+      const army = this.state.armies[key];
+      if (army.remove && army.remove_time < 0) {
+        if (army.waiting) army.waiting.is_waiting = false;
+        this.deleteArmy(army);
+        delete this.state.armies[key];
+      }
+    }
+  }
+
+  deleteArmy(army) {
+    if (army.field && army.field.army === army) {
+      army.field.army = null;
+    }
+  }
+
+  updateHumanCondition() {
+    const humanParty = this.state.parties[this.state.humanPlayerId];
+    if (!humanParty) return;
+    const humanTotalPower = humanParty.morale + humanParty.totalCount;
+    let condition = 1;
+    for (const party of this.state.parties) {
+      if (party.id !== this.state.humanPlayerId && party.status > 0) {
+        const enemyPower = party.morale + party.totalCount;
+        if (humanTotalPower < 0.3 * enemyPower) condition = 3;
+        else if (condition < 3 && humanTotalPower < 0.6 * enemyPower)
+          condition = 2;
+        else if (
+          humanParty.provincesCp &&
+          humanParty.provincesCp.length >= 2 &&
+          humanTotalPower > 2 * enemyPower
+        )
+          condition = 0;
+      }
+    }
+    this.state.humanCondition = condition;
+  }
+
+  updateFieldVisuals(field) {}
+
+  /**
+   * Make an AI move for the specified party
+   * NOTE: This should ONLY be called in single-player mode
+   */
+  makeMove(partyId) {
+    if (this.state.isMultiplayer) {
+      console.warn(
+        "GameLogic.makeMove called in multiplayer mode! usage of this method is restricted to single player logic.",
+      );
+      return;
     }
 
-    addMoraleForAll(amount, partyId) {
-        if (amount === 0) return;
-        const party = this.state.parties[partyId];
-        for (const army of party.armies) {
-             let m = army.morale + amount;
-             if (m < 0) m = 0;
-             if (m > army.count) m = army.count;
-             army.morale = m;
-        }
+    // Safety check: Bot must exist for AI calculations
+    if (!this.bot) {
+      console.error("GameLogic.makeMove called but bot is null");
+      return;
     }
 
-    // --- Annexation ---
+    const profitability = this.bot.calcArmiesProfitability(partyId, this.state);
+    profitability.sort((a, b) => {
+      if (a.profitability > b.profitability) return -1;
+      if (a.profitability < b.profitability) return 1;
+      return b.count + b.morale - (a.count + a.morale);
+    });
 
-    annexLand(partyId, field, startup) {
-        if (!field.army && !startup) return;
-        if (field.type !== "land") return;
+    if (profitability.length === 0) return;
 
-        // Morale calculations
-        if (field.party >= 0 && field.party !== partyId) {
-            // Lost territory logic
-             this.addMoraleForAll(this.calcMoraleLost(field.party, field), field.party);
-             
-             // Liberation logic
-             if (field.capital >= 0 && field.capital === field.party) {
-                 const originalOwner = this.state.parties[field.party];
-                 if (originalOwner.provincesCp) {
-                     for (const cap of originalOwner.provincesCp) {
-                         // Liberate
-                         if (cap.army) {
-                             Animations.animateExplosion(cap.army);
-                             this.setExplosion(cap.army, cap.army, null);
-                             cap.army = null;
-                         }
-                         // Respawn original
-                         this.joinUnits(99, 99, cap.capital, null, cap);
-                         this.annexLand(cap.capital, cap, true);
-                     }
-                 }
-             }
+    const bestArmy = profitability[0];
+    const move = bestArmy.move;
+    const party = this.state.parties[partyId];
+
+    if (!move.wait_for_support) {
+      party.waitForSupportField = null;
+      party.waitForSupportCount = 0;
+      this.moveArmy(bestArmy, move);
+    } else {
+      if (move === party.waitForSupportField) {
+        party.waitForSupportCount++;
+      } else {
+        party.waitForSupportField = move;
+        party.waitForSupportCount = 0;
+      }
+
+      const supportArmies = this.bot.supportArmy(
+        partyId,
+        bestArmy,
+        move,
+        this.state,
+      );
+      if (supportArmies.length > 0) {
+        supportArmies.sort((a, b) => b.tmp_prof - a.tmp_prof);
+        this.moveArmy(supportArmies[0], supportArmies[0].move);
+      } else {
+        this.moveArmy(bestArmy, move);
+      }
+    }
+  }
+
+  /**
+   * Move an army with visual effects
+   * NOTE: This should ONLY be called in single-player mode
+   * In multiplayer, use applyMoveWithVisuals() instead
+   */
+  moveArmy(army, targetField) {
+    const sourceField = army.field;
+    this.updateGameLog(
+      `${this.state.parties[army.party].name} moved unit from (${sourceField.fx},${sourceField.fy}) to (${targetField.fx},${targetField.fy})`,
+    );
+
+    // 1. EXECUTE LOGIC (State Changes happen here via GameEngine)
+    const result = super.executeMove(sourceField, targetField);
+
+    // 2. HANDLE VISUALS (Animations based on what GameEngine returned)
+    if (result.success) {
+      const joinEvent = result.events.find((e) => e.type === "join");
+      const hasRemainder =
+        joinEvent && joinEvent.movingArmy && joinEvent.movingArmy.remainder > 0;
+
+      if (hasRemainder) {
+        if (!army.visual) {
+          army.visual = { x: sourceField._x, y: sourceField._y };
         }
+      } else {
+        Animations.animateMove(army, targetField._x, targetField._y);
+      }
 
-        if (!startup && field.party !== partyId) {
-             const earned = this.calcMoraleEarned(partyId, field);
-             // Apply earned. [all, army]
-             // Original: addMoraleForAA
-             const army = field.army;
-             if (army) {
-                 let m = army.morale + earned[1];
-                 if (m < 0) m = 0;
-                 if (m > army.count) m = army.count;
-                 army.morale = m;
-             }
-             this.addMoraleForAll(earned[0], partyId);
-        }
+      // Combat/Join Animations
+      this.handleEventsVisuals(result.events, army, targetField);
 
-        // Change ownership
-        field.party = partyId;
-
-        // Auto-annex empty neighbours
-        for (const n of field.neighbours) {
-            if (n && n.type === "land" && !n.estate && !n.army) {
-                // Check peace treaty constraint
-                const peace = this.state.peace;
-                if (peace >= 0 && 
-                   ((n.party === peace && partyId === this.state.humanPlayerId) ||
-                    (partyId === peace && n.party === this.state.humanPlayerId))) {
-                    continue; 
-                }
-
-                if (!startup && n.party !== partyId) {
-                    const earned = this.calcMoraleEarned(partyId, n);
-                     // Original logic adds morale to 'field.army' which is the conqueror
-                     const army = field.army;
-                     if (army) {
-                         let m = army.morale + earned[1];
-                         if (m < 0) m = 0;
-                         if (m > army.count) m = army.count;
-                         army.morale = m;
-                     }
-                     this.addMoraleForAll(earned[0], partyId);
-                }
-                n.party = partyId;
-            }
-        }
+      // Log detailed events
+      this.logEvents(result.events);
     }
 
-    calcMoraleLost(partyId, field) {
-        // Logic for morale lost when field is lost
-        if (field.capital === partyId) {
-            if (this.state.humanPlayerId === partyId) {
-                // Game over?
-            }
-            // Original returns 0, handled elsewhere?
-            return 0;
-        } else {
-             if (field.capital >= 0) {
-                 if (this.state.humanPlayerId === partyId) {
-                     // board.news = "town_lost"
-                 }
-                 return -30;
-             }
-             if (field.estate === "town") return -10;
-             if (field.estate === "port") return -5;
+    this.updateBoard();
+    return result.success;
+  }
+
+  logEvents(events) {
+    for (const event of events) {
+      if (event.type === "combat") {
+        const winnerIsAttacker = event.winner === event.attacker.id;
+        const winnerPartyId = winnerIsAttacker
+          ? event.attacker.party
+          : event.defender.party;
+        const loserPartyId = winnerIsAttacker
+          ? event.defender.party
+          : event.attacker.party;
+        const winnerParty = this.state.parties[winnerPartyId]
+          ? this.state.parties[winnerPartyId].name
+          : "Unknown";
+        const loserParty = this.state.parties[loserPartyId]
+          ? this.state.parties[loserPartyId].name
+          : "Unknown";
+        this.updateGameLog(
+          `<span style="color:#ff5252">Combat:</span> ${winnerParty} defeated ${loserParty}`,
+        );
+      } else if (event.type === "annex") {
+        const partyName = this.state.parties[event.newParty].name;
+        this.updateGameLog(
+          `<span style="color:#69f0ae">Annex:</span> ${partyName} captured territory at (${event.field.fx}, ${event.field.fy})`,
+        );
+      } else if (event.type === "join") {
+        this.updateGameLog(
+          `<span style="color:#448aff">Merge:</span> Army merged at target.`,
+        );
+      } else if (event.type === "land_transfer") {
+        const partyName = this.state.parties[event.newParty].name;
+        this.updateGameLog(`Land Transfer: ${partyName} inherited territory.`);
+      }
+    }
+  }
+
+  handleEventsVisuals(events, movingArmy, targetField) {
+    let combatOccurred = false;
+
+    for (const event of events) {
+      if (event.type === "combat") {
+        combatOccurred = true;
+        const attacker = this.state.armies[event.attacker.id];
+        const defender = this.state.armies[event.defender.id];
+
+        if (attacker && defender) {
+          Animations.animateAttack(attacker, defender);
         }
-        return 0;
+
+        const loser = this.state.armies[event.loser];
+        if (loser) {
+          Animations.animateExplosion(loser);
+          const winningArmy =
+            event.winner === movingArmy.id ? movingArmy : null;
+          this.setExplosion(winningArmy, loser, winningArmy);
+        }
+      } else if (event.type === "join") {
+        const targetArmy = this.state.armies[event.targetArmy.id];
+        const movingArmyRef = this.state.armies[event.movingArmy.id];
+
+        if (movingArmyRef && targetArmy) {
+          if (event.movingArmy.remainder > 0) {
+            Animations.animateMerge(null, targetArmy);
+          } else {
+            Animations.animateMerge(movingArmyRef, targetArmy);
+            this.setArmyRemoval(movingArmyRef, targetArmy);
+          }
+        }
+      }
+    }
+  }
+
+  setExplosion(attacking, exploding, waiting) {
+    if (attacking) attacking.exploding = exploding;
+    if (exploding) exploding.remove_time = 36;
+    if (waiting && attacking) {
+      attacking.waiting = waiting;
+      waiting.is_waiting = true;
+    }
+  }
+
+  setArmyRemoval(army, waiting) {
+    army.remove = true;
+    army.remove_time = 24;
+    if (waiting) {
+      army.waiting = waiting;
+      waiting.is_waiting = true;
+    }
+  }
+
+  /**
+   * Spawn units with visual initialization
+   * NOTE: This should ONLY be called in single-player mode
+   */
+  spawnUnits(partyId) {
+    // Use parent to spawn (handles state changes)
+    const events = super.spawnUnits(partyId);
+
+    // Initialize visual props for new units
+    let spawnCount = 0;
+    for (const event of events) {
+      if (event.type === "spawn") {
+        spawnCount += event.newCount - (event.isNew ? 0 : event.newCount - 5); // Rough estimate, or just count events
+        const field = this.state.getField(event.field.fx, event.field.fy);
+        if (field && field.army) {
+          if (!field.army.visual) {
+            field.army.visual = { x: field._x, y: field._y };
+          }
+          field.army.remove_time = -1;
+        }
+      }
     }
 
-    calcMoraleEarned(partyId, field) {
-         if (field.capital >= 0) {
-             if (field.capital === field.party) {
-                 this.updateGameLog(`${this.state.parties[partyId].name} conquered ${this.state.parties[field.party].name}`);
-                 return [50, 30];
-             }
-             this.updateGameLog(`${this.state.parties[partyId].name} captured capital from ${this.state.parties[field.party].name}`);
-             return [30, 20];
-         }
-         if (field.estate === "town") {
-             if (field.party >= 0) {
-                 this.updateGameLog(`${this.state.parties[partyId].name} captured town ${field.town_name}`);
-             } else {
-                 this.updateGameLog(`${this.state.parties[partyId].name} annexed town ${field.town_name}`);
-             }
-             return [10, 10];
-         }
-         if (field.estate === "port") {
-             if (field.party >= 0) {
-                 this.updateGameLog(`${this.state.parties[partyId].name} captured port ${field.town_name}`);
-             } else {
-                 this.updateGameLog(`${this.state.parties[partyId].name} annexed port ${field.town_name}`);
-             }
-             return [5, 5];
-         }
-         if (field.type === "land") return [1, 0];
-         return [0, 0];
-    }
-    
-    unitsSpawn(partyId) {
-         const party = this.state.parties[partyId];
-         let ucount = party.lands.length + party.ports.length * 5;
-         ucount = Math.floor(ucount / (party.towns.length || 1)); // Avoid div by zero
-         
-         // Capital spawn
-         if (party.capital.party === partyId) {
-             let morale = party.morale;
-             if (party.capital.army) morale = party.capital.army.morale;
-             this.joinUnits(5, morale, partyId, null, party.capital);
-             this.annexLand(partyId, party.capital, true);
-         }
-
-         // Towns spawn
-         for (const town of party.towns) {
-             let morale = party.morale;
-             if (town.army) morale = town.army.morale;
-             this.joinUnits(5 + ucount, morale, partyId, null, town);
-             this.annexLand(partyId, town, true);
-         }
+    if (events.length > 0) {
+      this.updateGameLog(
+        `Spawned reinforcements for ${this.state.parties[partyId].name}`,
+      );
     }
 
+    return events;
+  }
+
+  /**
+   * Apply a move that was already executed on the server
+   * This only handles visual effects, not state changes
+   */
+  applyMoveWithVisuals(army, targetField, events) {
+    // Animate the move
+    Animations.animateMove(army, targetField._x, targetField._y);
+
+    // Handle visual effects for events
+    this.handleEventsVisuals(events, army, targetField);
+  }
+
+  getMovableArmies(partyId) {
+    const movableArmies = [];
+    const armies = this.state.parties[partyId].armies;
+    for (const army of armies) {
+      if (!army.moved) {
+        movableArmies.push(army);
+      }
+    }
+    return movableArmies;
+  }
 }

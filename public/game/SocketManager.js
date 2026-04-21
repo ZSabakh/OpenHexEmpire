@@ -1,0 +1,275 @@
+export class SocketManager {
+  constructor() {
+    this.socket = null;
+    this.connected = false;
+    this.roomId = null;
+    this.partyId = null;
+    this.playerName = null;
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 10;
+  }
+
+  connect() {
+    return new Promise((resolve, reject) => {
+      this.socket = io({
+        reconnection: true,
+        reconnectionAttempts: this.maxReconnectAttempts,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        timeout: 10000,
+      });
+
+      this.socket.on("connected", (data) => {
+        console.log("Connected to Server:", data.message);
+        console.log("Socket ID:", data.socketId);
+        this.connected = true;
+        this.reconnectAttempts = 0;
+
+        // Re-join room on reconnect
+        if (this.roomId) {
+          console.log(
+            "[SocketManager] Reconnected, re-joining room",
+            this.roomId,
+          );
+          this.joinGame(this.roomId, this.playerName || "Player");
+        }
+
+        resolve(data);
+      });
+
+      this.socket.on("connect_error", (error) => {
+        console.error("Connection error:", error);
+        this.connected = false;
+        this.reconnectAttempts++;
+        if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+          reject(error);
+        }
+      });
+
+      // Set up other event listeners
+      this.setupEventListeners();
+    });
+  }
+
+  setupEventListeners() {
+    this.socket.on("game_created", (data) => {
+      console.log("Game created:", data);
+      if (data.success) {
+        this.roomId = data.roomId;
+        this.partyId = data.partyId;
+        this.playerName = data.playerName;
+
+        // Dispatch custom event for the game to handle
+        window.dispatchEvent(new CustomEvent("gameCreated", { detail: data }));
+      } else {
+        console.error("Failed to create game:", data.error);
+      }
+    });
+
+    this.socket.on("game_joined", (data) => {
+      console.log("Game joined:", data);
+      if (data.success) {
+        this.roomId = data.roomId;
+        this.partyId = data.partyId;
+        this.playerName = data.playerName;
+
+        // Dispatch custom event for the game to handle
+        window.dispatchEvent(new CustomEvent("gameJoined", { detail: data }));
+      } else {
+        console.error("Failed to join game:", data.error);
+      }
+    });
+
+    this.socket.on("map_data", (data) => {
+      console.log("Map data received:", data);
+      window.dispatchEvent(
+        new CustomEvent("mapDataReceived", { detail: data }),
+      );
+    });
+
+    this.socket.on("player_joined", (data) => {
+      console.log("Player joined:", data);
+      window.dispatchEvent(new CustomEvent("playerJoined", { detail: data }));
+    });
+
+    this.socket.on("player_left", (data) => {
+      console.log("Player left:", data);
+      window.dispatchEvent(new CustomEvent("playerLeft", { detail: data }));
+    });
+
+    this.socket.on("faction_selected", (data) => {
+      console.log("Faction selected:", data);
+      window.dispatchEvent(
+        new CustomEvent("factionSelected", { detail: data }),
+      );
+    });
+
+    this.socket.on("existing_factions", (data) => {
+      console.log("Existing factions received:", data);
+      window.dispatchEvent(
+        new CustomEvent("existingFactions", { detail: data }),
+      );
+    });
+
+    this.socket.on("ready_status_update", (data) => {
+      console.log("Ready status update:", data);
+      window.dispatchEvent(
+        new CustomEvent("readyStatusUpdate", { detail: data }),
+      );
+    });
+
+    this.socket.on("all_players_ready", () => {
+      console.log("All players ready, starting game");
+      window.dispatchEvent(new CustomEvent("allPlayersReady"));
+    });
+
+    this.socket.on("new_turn", (data) => {
+      console.log("New turn:", data);
+      window.dispatchEvent(new CustomEvent("newTurn", { detail: data }));
+    });
+
+    this.socket.on("move_executed", (data) => {
+      console.log("Move executed:", data);
+      window.dispatchEvent(new CustomEvent("moveExecuted", { detail: data }));
+    });
+
+    this.socket.on("move_error", (data) => {
+      console.error("Move error:", data.error);
+      window.dispatchEvent(new CustomEvent("moveError", { detail: data }));
+    });
+
+    this.socket.on("turn_error", (data) => {
+      console.error("Turn error:", data.error);
+      window.dispatchEvent(new CustomEvent("turnError", { detail: data }));
+    });
+
+    this.socket.on("game_ended", (data) => {
+      console.log("Game ended:", data);
+      window.dispatchEvent(new CustomEvent("gameEnded", { detail: data }));
+    });
+
+    this.socket.on("units_spawned", (data) => {
+      console.log("Units spawned:", data);
+      window.dispatchEvent(new CustomEvent("unitsSpawned", { detail: data }));
+    });
+
+    this.socket.on("full_resync", (data) => {
+      console.log("Full resync received from server");
+      window.dispatchEvent(new CustomEvent("fullResync", { detail: data }));
+    });
+
+    this.socket.on("resync_error", (data) => {
+      console.error("Resync error:", data.error);
+    });
+
+    this.socket.on("disconnect", (reason) => {
+      console.log("Disconnected from server:", reason);
+      this.connected = false;
+      if (reason === "io server disconnect") {
+        // Server forced disconnect, try manual reconnect
+        this.socket.connect();
+      }
+      // Otherwise socket.io auto-reconnects
+    });
+  }
+
+  createGame(mapSeed, playerName = "Player") {
+    if (!this.connected) {
+      console.error("Not connected to server");
+      return;
+    }
+
+    this.socket.emit("create_game", {
+      mapSeed: mapSeed,
+      playerName: playerName,
+    });
+  }
+
+  joinGame(roomId, playerName = "Player") {
+    if (!this.connected) {
+      console.error("Not connected to server");
+      return;
+    }
+
+    this.socket.emit("join_game", {
+      roomId: roomId,
+      playerName: playerName,
+    });
+  }
+
+  isConnected() {
+    return this.connected;
+  }
+
+  getRoomId() {
+    return this.roomId;
+  }
+
+  getPartyId() {
+    return this.partyId;
+  }
+
+  getPlayerName() {
+    return this.playerName;
+  }
+
+  selectFaction(roomId, partyId, playerName) {
+    if (!this.connected) {
+      console.error("Not connected to server");
+      return;
+    }
+
+    this.socket.emit("faction_selected", {
+      roomId: roomId,
+      partyId: partyId,
+      playerName: playerName,
+    });
+  }
+
+  setReady(roomId, isReady) {
+    if (!this.connected) {
+      console.error("Not connected to server");
+      return;
+    }
+
+    this.socket.emit("player_ready", {
+      roomId: roomId,
+      isReady: isReady,
+    });
+  }
+
+  moveUnit(roomId, moveData) {
+    if (!this.connected) {
+      console.error("Not connected to server");
+      return;
+    }
+
+    this.socket.emit("move_unit", {
+      roomId: roomId,
+      moveData: moveData,
+    });
+  }
+
+  endTurn(roomId) {
+    if (!this.connected) {
+      console.error("Not connected to server");
+      return;
+    }
+
+    this.socket.emit("end_turn", {
+      roomId: roomId,
+    });
+  }
+
+  requestResync(roomId) {
+    if (!this.connected) {
+      console.error("Not connected to server");
+      return;
+    }
+
+    console.warn("[SocketManager] Requesting full state resync from server");
+    this.socket.emit("request_resync", {
+      roomId: roomId,
+    });
+  }
+}
