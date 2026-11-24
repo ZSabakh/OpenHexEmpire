@@ -42,48 +42,31 @@ export class GameRules {
     }
 
     static calculateJoin(movingArmy, targetArmy) {
-        const totalCount = targetArmy.count + movingArmy.count;
-        const maxCount = Config.UNITS.MAX_COUNT;
-        
-        if (totalCount <= maxCount) {
-            const newMorale = Math.floor((targetArmy.count * targetArmy.morale + movingArmy.count * movingArmy.morale) / totalCount);
-            let finalMorale = newMorale;
-            if (finalMorale > totalCount) finalMorale = totalCount;
-            
-            return {
-                count: totalCount,
-                morale: finalMorale,
-                remainder: 0
-            };
-        } else {
-            // Overflow
-            const joinedCount = maxCount - targetArmy.count;
-            const remainder = movingArmy.count - joinedCount;
-            
-            // Weighted average for the merged part
-            const newMorale = Math.floor((targetArmy.count * targetArmy.morale + joinedCount * movingArmy.morale) / maxCount);
-            let finalMorale = newMorale;
-            if (finalMorale > maxCount) finalMorale = maxCount;
-            
-            return {
-                count: maxCount,
-                morale: finalMorale,
-                remainder: remainder
-            };
-        }
+        const joinedCount = Math.min(movingArmy.count, Config.UNITS.MAX_COUNT - targetArmy.count);
+        const totalCount = targetArmy.count + joinedCount;
+        // When only part of the army fits, the troops left behind keep their share of morale.
+        const joinedMorale = Math.floor(movingArmy.morale * joinedCount / movingArmy.count);
+        const averageMorale = Math.floor(
+            (targetArmy.count * targetArmy.morale + joinedCount * joinedMorale) / totalCount
+        );
+        const bonus = Math.floor(Math.min(targetArmy.morale, joinedMorale) / 2);
+
+        return {
+            count: totalCount,
+            morale: Math.min(totalCount, averageMorale + bonus),
+            remainder: movingArmy.count - joinedCount,
+            remainderMorale: movingArmy.morale - joinedMorale
+        };
     }
 
-    static calculateMoraleEarned(partyId, field) {
-         if (field.capital !== undefined && field.capital >= 0) {
-             if (field.capital === field.party) {
-                 return [50, 30]; // Conquered faction: [PartyMorale, ArmyMorale]
-             }
-             return [30, 20]; // Captured capital
-         }
-         if (field.estate === "town") return [10, 10];
-         if (field.estate === "port") return [5, 5];
-         if (field.type === "land") return [1, 0];
-         return [0, 0];
+    static captureRecoveryRates(field) {
+        const rates = Config.MORALE_RECOVERY;
+        if (field.capital >= 0) {
+            return field.capital === field.party ? rates.HOME_CAPITAL_TAKEN : rates.OCCUPIED_CAPITAL;
+        }
+        if (field.estate === "town") return field.party < 0 ? rates.NEUTRAL_TOWN : rates.ENEMY_TOWN;
+        if (field.estate === "port") return rates.PORT;
+        return null;
     }
     
     static calculateMoraleLost(partyId, field) {

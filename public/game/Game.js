@@ -17,6 +17,7 @@ export class Game {
     this.pathfinder = new Pathfinder();
     this.bot = null;
     this.images = this.prepareImages();
+    this.imagesReady = null;
     this.state = null;
     this.mapNumber = -1;
     this.humanMovesLeft = 0;
@@ -162,12 +163,11 @@ export class Game {
       dynamicCanvas.height = pixelHeight * 2;
     }
 
-    const imagesToLoad = [];
-    for (const key in this.images) {
-      imagesToLoad.push(this.loadImage(this.images[key]));
-    }
-
-    return Promise.all(imagesToLoad).then(() => {
+    this.imagesReady ??= Promise.all(
+      Object.values(this.images).map((image) => this.loadImage(image)),
+    );
+    return this.imagesReady.then(() => {
+      if (mapNumber !== this.mapNumber) return;
       this.startNewGame(mapNumber);
       if (this.animFrameId) {
         cancelAnimationFrame(this.animFrameId);
@@ -184,6 +184,8 @@ export class Game {
 
   initGameSession(mapNumber, isSinglePlayer = true) {
     this.state = new GameModel();
+    this.state.mapSeed = mapNumber;
+    this.state.isMultiplayer = !isSinglePlayer;
 
     // Calculate pixel dimensions for rendering
     this.state.pixelWidth = Math.ceil(
@@ -247,6 +249,7 @@ export class Game {
     this.mapGenerator.generate();
 
     // Overlay dynamic state from server (ownership, armies)
+    for (const field of Object.values(this.state.fields)) field.party = -1;
     this.applyDynamicState(mapData);
 
     this.finishGameSession(random, mapData.mapSeed);
@@ -1088,6 +1091,7 @@ export class Game {
         if (event.movingArmy.remainder > 0) {
           // Overflow: moving army keeps remainder at source field
           movingArmy.count = event.movingArmy.remainder;
+          movingArmy.morale = event.movingArmy.finalMorale ?? movingArmy.morale;
           movingArmy.moved = true;
           // Army stays at its current field (source) - don't remove it
           if (targetArmy) {
@@ -1285,23 +1289,25 @@ export class Game {
     this.actionQueue = [];
     this.isProcessingAction = false;
 
-    // Clear all armies from fields and global dict
-    for (const key in this.state.armies) {
-      const army = this.state.armies[key];
-      if (army.field && army.field.army === army) {
-        army.field.army = null;
+    // Ownership and army updates only make sense on the room's terrain.
+    if (this.state.mapSeed !== serverState.mapSeed) {
+      const { humanPlayerId, isSpectating } = this.state;
+      this.mapNumber = serverState.mapSeed;
+      this.startGameFromServerData(serverState);
+      this.state.isMultiplayer = this.isMultiplayer;
+      this.state.humanPlayerId = humanPlayerId;
+      this.state.isSpectating = isSpectating;
+      this.selectedArmy = null;
+      this.hoveredField = null;
+    } else {
+      // Clear local ownership and armies before applying the snapshot.
+      this.state.armies = {};
+      for (const field of Object.values(this.state.fields)) {
+        field.party = -1;
+        field.army = null;
       }
+      this.applyDynamicState(serverState);
     }
-    this.state.armies = {};
-
-    // Clear all field ownership
-    for (const key in this.state.fields) {
-      this.state.fields[key].party = -1;
-      this.state.fields[key].army = null;
-    }
-
-    // Re-apply dynamic state from server
-    this.applyDynamicState(serverState);
 
     // Recalculate move budget if it's the human player's turn
     if (
@@ -1666,6 +1672,10 @@ export class Game {
   }
 
   restartSameMap() {
+    if (this.isMultiplayer) {
+      window.location.assign(`?map=${this.mapNumber}`);
+      return;
+    }
     this.closeGameEndModal();
     if (this.state) {
       this.state.isSpectating = false;
@@ -1677,6 +1687,10 @@ export class Game {
   }
 
   startNewRandomMap() {
+    if (this.isMultiplayer) {
+      window.location.assign(window.location.pathname);
+      return;
+    }
     this.closeGameEndModal();
     if (this.state) {
       this.state.isSpectating = false;

@@ -80,6 +80,8 @@ export class GameEngine {
    */
   attack(attacker, defender, field) {
     const events = [];
+    const attackerPower = attacker.count + attacker.morale;
+    const defenderPower = defender.count + defender.morale;
     const combatResult = GameRules.calculateCombat(attacker, defender);
 
     const result = {
@@ -112,21 +114,16 @@ export class GameEngine {
     defender.count = combatResult.defNewCount;
     defender.morale = combatResult.defNewMorale;
 
-    if (combatResult.winner === "attacker") {
-      defender.remove = true;
-      const penalty = GameRules.calculateMoralePenalty(
-        result.defender.initialCount,
-      );
-      const moraleUpdate = this.addMoraleForAll(penalty, defender.party);
-      if (moraleUpdate) events.push(moraleUpdate);
-    } else {
-      attacker.remove = true;
-      const penalty = GameRules.calculateMoralePenalty(
-        result.attacker.initialCount,
-      );
-      const moraleUpdate = this.addMoraleForAll(penalty, attacker.party);
-      if (moraleUpdate) events.push(moraleUpdate);
-    }
+    const attackerWon = combatResult.winner === "attacker";
+    const winner = attackerWon ? attacker : defender;
+    const loser = attackerWon ? defender : attacker;
+    loser.remove = true;
+    const penalty = GameRules.calculateMoralePenalty(result[combatResult.loser].initialCount);
+    const moraleUpdate = this.addMoraleForAll(penalty, loser.party);
+    if (moraleUpdate) events.push(moraleUpdate);
+
+    const significantWin = Math.min(attackerPower, defenderPower) * 2 >= Math.max(attackerPower, defenderPower);
+    this.recoverMorale(events, winner.party, winner, Config.MORALE_RECOVERY.BATTLE, significantWin);
 
     events.unshift(result);
     return events;
@@ -161,8 +158,10 @@ export class GameEngine {
     if (joinResult.remainder > 0) {
       // Overflow: Moving army keeps remainder and stays at source
       movingArmy.count = joinResult.remainder;
+      movingArmy.morale = joinResult.remainderMorale;
       movingArmy.remove = false;
       result.movingArmy.finalCount = joinResult.remainder;
+      result.movingArmy.finalMorale = movingArmy.morale;
       result.movingArmy.remainder = joinResult.remainder;
     } else {
       // Full merge
@@ -190,24 +189,11 @@ export class GameEngine {
       if (moraleUpdate) events.push(moraleUpdate);
     }
 
-    // Earned logic
+    let gainedPlainLand = false;
     if (field.party !== partyId) {
-      const earned = GameRules.calculateMoraleEarned(partyId, field);
-
-      // Party morale
-      const moraleUpdate = this.addMoraleForAll(earned[0], partyId);
-      if (moraleUpdate) events.push(moraleUpdate);
-
-      // Specific army morale (the one on this field)
-      if (field.army && field.army.party === partyId) {
-        let m = field.army.morale + earned[1];
-        if (m < 0) m = 0;
-        if (m > field.army.count) m = field.army.count;
-
-        if (m !== field.army.morale) {
-          field.army.morale = m;
-        }
-      }
+      const rates = GameRules.captureRecoveryRates(field);
+      if (rates) this.recoverMorale(events, partyId, field.army, rates);
+      gainedPlainLand = !field.estate;
     }
 
     const result = {
@@ -231,12 +217,7 @@ export class GameEngine {
       ) {
         const oldNeighborParty = n.party;
 
-        if (n.party !== partyId) {
-          const earnedN = GameRules.calculateMoraleEarned(partyId, n);
-          const moraleUpdateN = this.addMoraleForAll(earnedN[0], partyId);
-          if (moraleUpdateN) events.push(moraleUpdateN);
-        }
-
+        gainedPlainLand = true;
         n.party = partyId;
 
         events.push({
@@ -248,13 +229,30 @@ export class GameEngine {
       }
     }
 
+    const army = field.army;
+    if (gainedPlainLand && army && army.party === partyId && army.morale < army.count) {
+      army.morale++;
+      events.push({ type: "morale_update", updates: [{ id: army.id, morale: army.morale }] });
+    }
+
     events.unshift(result);
     return events;
   }
 
-  /**
-   * Add morale to all armies of a party
-   */
+  recoverMorale(events, partyId, participant, rates, rallyAllies = true) {
+    const updates = [];
+    for (const army of Object.values(this.gameModel.armies)) {
+      if (army.party !== partyId || army.remove) continue;
+      if (army !== participant && !rallyAllies) continue;
+      const rate = army === participant ? rates.participant : rates.allies;
+      const gain = Math.round((army.count - army.morale) * rate);
+      if (gain <= 0) continue;
+      army.morale += gain;
+      updates.push({ id: army.id, morale: army.morale });
+    }
+    if (updates.length) events.push({ type: "morale_update", updates });
+  }
+
   addMoraleForAll(amount, partyId) {
     const updates = GameRules.calculateGlobalMoraleUpdates(
       this.gameModel.armies,
@@ -283,8 +281,6 @@ export class GameEngine {
    */
   spawnUnits(partyId) {
     const events = [];
-    const party = this.gameModel.parties[partyId];
-
     // Count territories
     let landCount = 0;
     let portCount = 0;
@@ -307,33 +303,10 @@ export class GameEngine {
       (landCount + portCount * 5) / (towns.length || 1),
     );
 
-    // Capital spawn
-    const capitalField = this.gameModel.getField(
-      party.capital.fx,
-      party.capital.fy,
-    );
-    if (capitalField && capitalField.party === partyId) {
-      const event = this.addUnitsToField(
-        capitalField,
-        5,
-        party.morale,
-        partyId,
-      );
-      events.push(event);
-    }
-
-    // Towns spawn
+    // Count the home capital's extra five in the same recruitment batch.
     for (const town of towns) {
-      const townField = this.gameModel.getField(town.fx, town.fy);
-      if (townField) {
-        const event = this.addUnitsToField(
-          townField,
-          5 + ucount,
-          party.morale,
-          partyId,
-        );
-        events.push(event);
-      }
+      const capitalBonus = town.capital === partyId ? 5 : 0;
+      events.push(this.addUnitsToField(town, 5 + ucount + capitalBonus, partyId));
     }
 
     return events;
@@ -366,7 +339,10 @@ export class GameEngine {
   /**
    * Add units to a field (spawn or reinforce)
    */
-  addUnitsToField(field, count, morale, partyId) {
+  addUnitsToField(field, count, partyId) {
+    const available = Config.UNITS.MAX_COUNT - (field.army?.count ?? 0);
+    const recruits = Math.min(count, available);
+    const recruitMorale = Math.round(recruits * Config.UNITS.RECRUIT_MORALE_RATE);
     let event = {
       type: "spawn",
       field: { fx: field.fx, fy: field.fy },
@@ -374,16 +350,9 @@ export class GameEngine {
     };
 
     if (field.army) {
-      // Reinforce existing army
-      const newCount = field.army.count + count;
-      const newMorale = Math.floor(
-        (field.army.count * field.army.morale + count * morale) / newCount,
-      );
-      field.army.count =
-        newCount > Config.UNITS.MAX_COUNT ? Config.UNITS.MAX_COUNT : newCount;
-      field.army.morale = newMorale;
-      if (field.army.morale > field.army.count)
-        field.army.morale = field.army.count;
+      const army = field.army;
+      army.count += recruits;
+      army.morale += recruitMorale;
 
       event.armyId = field.army.id;
       event.newCount = field.army.count;
@@ -395,13 +364,12 @@ export class GameEngine {
         id: `army${this.gameModel.armyIdCounter++}`,
         field: field,
         party: partyId,
-        count: count > Config.UNITS.MAX_COUNT ? Config.UNITS.MAX_COUNT : count,
-        morale: morale,
+        count: recruits,
+        morale: recruitMorale,
         moved: true,
         remove: false,
         remove_time: -1,
       };
-      if (army.morale > army.count) army.morale = army.count;
       field.army = army;
       this.gameModel.armies[army.id] = army;
 
