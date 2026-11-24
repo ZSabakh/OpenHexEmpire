@@ -214,9 +214,6 @@ export class Bot {
           let profitability = Config.AI_WEIGHTS.CAPITAL_THREAT;
           if (otherParty.capital.party === otherParty.capital.capital) {
             profitability = field.profitability[otherParty.id];
-          if (otherParty.control === "human") {
-            profitability += state.difficulty * 2;
-          }
         }
         if (totalProfitability < profitability) {
             totalProfitability = profitability;
@@ -300,9 +297,6 @@ export class Bot {
              totalProfitability += Config.AI_WEIGHTS.COMBAT_WIN;
              if (isCapitalThreat) {
                  totalProfitability += 10000; // MASSIVE priority to kill threat
-             }
-             if (field.party !== state.humanPlayerId) {
-                 totalProfitability += Config.AI_WEIGHTS.COMBAT_WIN_ENEMY; 
              }
              if (field.estate === "town") {
                  totalProfitability += Config.AI_WEIGHTS.TAKE_TOWN;

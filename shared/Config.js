@@ -22,6 +22,7 @@ export const Config = {
     },
     UNITS: {
         MAX_COUNT: 99,
+        RECRUIT_MORALE_RATE: 0.45,
         SCALE: {
             INFANTRY: 0.09,
             ARTILLERY: 0.12,
@@ -32,6 +33,14 @@ export const Config = {
             TANK: 75,
             ARTILLERY: 40
         }
+    },
+    MORALE_RECOVERY: {
+        BATTLE: { participant: 0.20, allies: 0.05 },
+        NEUTRAL_TOWN: { participant: 0.15, allies: 0.07 },
+        PORT: { participant: 0.25, allies: 0.10 },
+        ENEMY_TOWN: { participant: 0.35, allies: 0.15 },
+        OCCUPIED_CAPITAL: { participant: 0.50, allies: 0.25 },
+        HOME_CAPITAL_TAKEN: { participant: 0.65, allies: 0.35 },
     },
     ANIMATION: {
         MOVE_DURATION: 0.5,
