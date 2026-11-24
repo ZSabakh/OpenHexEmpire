@@ -88,6 +88,9 @@ $(function(){
   });
 
   function updateMultiplayerUI(roomId) {
+    for (const id of ['mapNumberInput', 'changeMapButton', 'randomMapButton']) {
+      document.getElementById(id).disabled = true;
+    }
     document.getElementById('multiplayerBar').style.display = 'block';
     document.getElementById('roomIdDisplay').textContent = roomId;
     
@@ -160,7 +163,11 @@ $(function(){
     });
   };
 
-  game.generateRandomMap();
+  if (!roomId) {
+    const requestedMap = urlParams.get('map');
+    if (/^\d{1,6}$/.test(requestedMap)) game.generateNewMap(Number(requestedMap));
+    else game.generateRandomMap();
+  }
 
   var mapNumberInput = document.getElementById('mapNumberInput');
   var changeMapButton = document.getElementById('changeMapButton');
