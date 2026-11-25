@@ -19,6 +19,8 @@ export class GameRoom {
     this.bot = null;
     this.maxPlayers = 4;
     this.gameStarted = false;
+    this.outcome = null;
+    this.reconnectTimers = new Map();
     this.movesUsedThisTurn = 0;
     this.maxMovesThisTurn = 0;
     this.aiTurnInProgress = false;
@@ -169,7 +171,7 @@ export class GameRoom {
 
   setPlayerReady(socketId, isReady) {
     const player = this.players.get(socketId);
-    if (player && player.partyId !== null) {
+    if (!this.gameStarted && player && player.partyId !== null) {
       this.readyStatus[player.partyId] = isReady;
       console.log(
         `[GameRoom ${this.roomId}] Player ${player.name} (faction ${player.partyId}) ready status: ${isReady}`,
@@ -195,7 +197,8 @@ export class GameRoom {
   areAllPlayersReady() {
     const totalPlayers = this.getTotalPlayersWithFactions();
     const readyPlayers = this.getReadyCount();
-    return totalPlayers > 0 && readyPlayers === totalPlayers;
+    return !this.gameStarted && this.reconnectTimers.size === 0 &&
+      totalPlayers > 0 && readyPlayers === totalPlayers;
   }
 
   removePlayer(socketId) {
@@ -229,8 +232,10 @@ export class GameRoom {
     return {
       roomId: this.roomId,
       mapSeed: this.mapSeed,
-      players: Array.from(this.players.values()),
+      players: Array.from(this.players.values(), ({ playerId, partyId, name }) => ({ playerId, partyId, name })),
       gameStarted: this.gameStarted,
+      outcome: this.outcome,
+      readyStatus: this.readyStatus,
       dynamicState: this.serializeDynamicState(),
       parties: this.serializeParties(),
       turn: this.gameModel.turn,
@@ -312,21 +317,16 @@ export class GameRoom {
     return { success: true };
   }
 
-  nextTurn() {
+  checkVictory() {
     const activeParties = this.gameModel.parties.filter((p) => p.status > 0);
 
-    // Condition A: Only 1 party left (Total Domination)
-    if (activeParties.length === 1 && this.players.size > 0) {
-      console.log(
-        `[GameRoom ${this.roomId}] Game Won by ${activeParties[0].name}`,
-      );
-      return {
-        gameEnded: true,
-        reason: "victory",
-        winner: activeParties[0].id,
-      };
+    if (activeParties.length === 1) {
+      return { reason: "victory", winnerPartyId: activeParties[0].id };
     }
+    return null;
+  }
 
+  nextTurn() {
     this.gameModel.turnParty++;
     if (this.gameModel.turnParty >= this.gameModel.parties.length) {
       this.gameModel.turnParty = 0;

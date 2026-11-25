@@ -183,6 +183,9 @@ export class Game {
   }
 
   initGameSession(mapNumber, isSinglePlayer = true) {
+    this.cancelLocalAITurn?.();
+    this.matchOutcome = null;
+    this.defeatShown = false;
     this.state = new GameModel();
     this.state.mapSeed = mapNumber;
     this.state.isMultiplayer = !isSinglePlayer;
@@ -398,6 +401,7 @@ export class Game {
   }
 
   nextTurn() {
+    if (this.matchOutcome) return;
     this.state.turnParty++;
     if (this.state.turnParty >= this.state.parties.length) {
       this.state.turnParty = 0;
@@ -412,35 +416,6 @@ export class Game {
 
     this.updateMapStatus();
     this.updateTopBar();
-
-    if (this.state.humanPlayerId >= 0 && !this.state.isSpectating) {
-      const humanParty = this.state.parties[this.state.humanPlayerId];
-
-      if (humanParty.status === 0) {
-        this.showGameEndModal("defeat");
-        return;
-      }
-
-      if (
-        humanParty.provincesCp &&
-        humanParty.provincesCp.length === this.state.parties.length - 1
-      ) {
-        this.showGameEndModal("victory");
-        return;
-      }
-    }
-
-    if (this.state.isSpectating) {
-      let activeParties = [];
-      for (const p of this.state.parties) {
-        if (p.status > 0) activeParties.push(p);
-      }
-
-      if (activeParties.length === 1) {
-        this.showGameEndModal("spectator_victory", activeParties[0].name);
-        return;
-      }
-    }
 
     if (this.state.parties[this.state.turnParty].status === 0) {
       this.nextTurn();
@@ -502,6 +477,7 @@ export class Game {
   }
 
   endHumanTurn() {
+    if (this.connectionPending || this.matchOutcome) return;
     // UI Cleanup
     const endBtn = document.getElementById("endTurnButton");
     if (endBtn) endBtn.style.display = "none";
@@ -545,7 +521,8 @@ export class Game {
     this.logic.updateBoard();
 
     // Use shared TurnExecutor
-    TurnExecutor.executeAITurn({
+    const turnState = this.state;
+    this.cancelLocalAITurn = TurnExecutor.executeAITurn({
       partyId: partyId,
       gameModel: this.state,
       gameLogic: this.logic,
@@ -554,13 +531,16 @@ export class Game {
         // Execute the AI move
         this.logic.makeMove(partyId);
         this.logic.updateBoard();
+        this.checkLocalOutcome();
       },
       onTurnComplete: () => {
         // Spawn units and proceed to next turn
         this.logic.spawnUnits(partyId);
         this.dynamicDirty = true;
         this.drawGame();
-        setTimeout(() => this.nextTurn(), 200);
+        setTimeout(() => {
+          if (this.state === turnState) this.nextTurn();
+        }, 200);
       },
       getDelay: (isAnimating) => {
         return isAnimating
@@ -634,7 +614,7 @@ export class Game {
   }
 
   handleInput(event) {
-    if (!this.state) return;
+    if (!this.state || this.connectionPending || this.matchOutcome || this.state.isSpectating) return;
     if (this.state.turnParty !== this.state.humanPlayerId) return;
     if (this.humanMovesLeft <= 0) return;
 
@@ -716,20 +696,7 @@ export class Game {
         this.dynamicDirty = true;
         this.drawGame();
 
-        // Check victory condition
-        if (this.state.humanPlayerId >= 0) {
-          const humanParty = this.state.parties[this.state.humanPlayerId];
-          if (
-            humanParty.provincesCp &&
-            humanParty.provincesCp.length === this.state.parties.length - 1
-          ) {
-            const topBarEndTurn = document.getElementById("topBarEndTurn");
-            if (topBarEndTurn) topBarEndTurn.style.display = "none";
-
-            this.showGameEndModal("victory");
-            return;
-          }
-        }
+        if (this.checkLocalOutcome()) return;
 
         // Check if turn should end
         if (this.humanMovesLeft <= 0 || !this.checkHumanCanMove()) {
@@ -779,8 +746,9 @@ export class Game {
     action.execute();
 
     // Wait for animations to complete before processing next action
+    const queue = this.actionQueue;
     this.waitForAnimations(() => {
-      this.processNextAction();
+      if (this.actionQueue === queue) this.processNextAction();
     });
   }
 
@@ -935,11 +903,15 @@ export class Game {
 
         this.logic.updateBoard();
 
+        if (moveData.outcome) this.latchOutcome(moveData.outcome);
+        else this.checkDefeat();
+
         // SAFETY CHECK: Only auto-end turn if this move belongs to the current turn party
         // AND it's the human player's turn. This prevents race conditions where previous
         // player's animations are still processing when a new turn starts.
         if (
           this.isMultiplayer &&
+          !this.connectionPending && !this.matchOutcome &&
           this.state.turnParty === this.state.humanPlayerId
         ) {
           // Additional check: only auto-end if the army that moved belongs to the current turn party
@@ -1285,9 +1257,7 @@ export class Game {
   handleFullResync(serverState) {
     console.warn("[RESYNC] Applying full state resync from server...");
 
-    // Clear action queue to prevent stale actions from executing
-    this.actionQueue = [];
-    this.isProcessingAction = false;
+    this.clearActionQueue();
 
     // Ownership and army updates only make sense on the room's terrain.
     if (this.state.mapSeed !== serverState.mapSeed) {
@@ -1309,9 +1279,15 @@ export class Game {
       this.applyDynamicState(serverState);
     }
 
+    this.clearTurnControls();
+    this.endTurnSent = false;
+    this.logic.updateBoard();
+    if (serverState.outcome) this.handleGameOutcome(serverState.outcome);
+    else this.checkDefeat();
+
     // Recalculate move budget if it's the human player's turn
     if (
-      this.isMultiplayer &&
+      this.isMultiplayer && !this.matchOutcome &&
       this.state.turnParty === this.state.humanPlayerId
     ) {
       const currentParty = this.state.parties[this.state.turnParty];
@@ -1357,7 +1333,6 @@ export class Game {
 
     // Update board
     this.mapRender.markTerritoryDirty();
-    this.logic.updateBoard();
     this.updateMapStatus();
     this.updateTopBar();
     this.dynamicDirty = true;
@@ -1550,6 +1525,7 @@ export class Game {
     const moveCounter = document.getElementById("moveCounter");
 
     if (
+      !this.matchOutcome && !this.connectionPending && !this.state.isSpectating &&
       this.state.turnParty === this.state.humanPlayerId &&
       this.state.humanPlayerId >= 0
     ) {
@@ -1562,6 +1538,66 @@ export class Game {
       if (topBarEndTurn) topBarEndTurn.style.display = "none";
       if (moveCounter) moveCounter.style.display = "none";
     }
+  }
+
+  clearTurnControls() {
+    this.selectedArmy = null;
+    this.humanMovesLeft = 0;
+    for (const id of ["topBarEndTurn", "endTurnButton", "moveCounter"]) {
+      const element = document.getElementById(id);
+      if (element) element.style.display = "none";
+    }
+    this.dynamicDirty = true;
+  }
+
+  clearActionQueue() {
+    this.actionQueue = [];
+    this.isProcessingAction = false;
+  }
+
+  checkDefeat() {
+    if (this.defeatShown || this.matchOutcome ||
+        this.state.parties[this.state.humanPlayerId]?.status !== 0) return;
+    this.defeatShown = true;
+    this.state.isSpectating = true;
+    this.clearTurnControls();
+    this.showGameEndModal("defeat");
+  }
+
+  latchOutcome(outcome) {
+    this.matchOutcome = outcome;
+    this.state.turnParty = -1;
+    this.clearTurnControls();
+  }
+
+  handleGameOutcome(outcome) {
+    this.latchOutcome(outcome);
+    this.queueAction({ execute: () => {
+      if (outcome.reason !== "victory") {
+        this.closeGameEndModal();
+        M.toast({ html: outcome.reason, classes: "orange" });
+        return;
+      }
+      const winner = this.state.parties[outcome.winnerPartyId];
+      const type = winner.id === this.state.humanPlayerId ? "victory" : "spectator_victory";
+      this.showGameEndModal(type, winner.name);
+    } });
+  }
+
+  checkLocalOutcome() {
+    const alive = this.state.parties.filter((party) => party.status > 0);
+    if (alive.length === 1) {
+      this.cancelLocalAITurn?.();
+      const state = this.state;
+      const outcome = { reason: "victory", winnerPartyId: alive[0].id };
+      this.latchOutcome(outcome);
+      this.waitForAnimations(() => {
+        if (this.state === state) this.handleGameOutcome(outcome);
+      });
+      return true;
+    }
+    this.checkDefeat();
+    return false;
   }
 
   showGameEndModal(type, winnerName) {
@@ -1613,11 +1649,11 @@ export class Game {
         buttonsContainer.innerHTML = `
             <button type="button" class="game-control-btn" id="spectateButton" style="width: 100%; padding: 15px; background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%);">
               <i class="material-icons" style="vertical-align: middle; margin-right: 8px;">visibility</i>
-              Spectate Game
+              Keep Watching
             </button>
             <button type="button" class="game-control-btn" id="leaveGameButton" style="width: 100%; padding: 15px; margin-top: 10px; background-color: #757575;">
               <i class="material-icons" style="vertical-align: middle; margin-right: 8px;">exit_to_app</i>
-              Leave Game
+              Create New Match
             </button>
           `;
       } else {
@@ -1628,13 +1664,13 @@ export class Game {
             </button>
             <button type="button" class="game-control-btn" id="spectateButton" style="width: 100%; padding: 15px; background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%);">
               <i class="material-icons" style="vertical-align: middle; margin-right: 8px;">visibility</i>
-              Watch AI Battle Continue
+              Keep Watching
             </button>
           `;
       }
     }
 
-    const modalInstance = M.Modal.init(modal, {
+    const modalInstance = M.Modal.getInstance(modal) ?? M.Modal.init(modal, {
       dismissible: false,
     });
     modalInstance.open();
@@ -1666,14 +1702,14 @@ export class Game {
 
       const leaveButton = document.getElementById("leaveGameButton");
       if (leaveButton) {
-        leaveButton.onclick = () => window.location.reload();
+        leaveButton.onclick = () => this.startNewRandomMap();
       }
     }
   }
 
   restartSameMap() {
     if (this.isMultiplayer) {
-      window.location.assign(`?map=${this.mapNumber}`);
+      this.socketManager.leaveGame(`?map=${this.mapNumber}`);
       return;
     }
     this.closeGameEndModal();
@@ -1688,7 +1724,7 @@ export class Game {
 
   startNewRandomMap() {
     if (this.isMultiplayer) {
-      window.location.assign(window.location.pathname);
+      this.socketManager.leaveGame(window.location.pathname);
       return;
     }
     this.closeGameEndModal();
@@ -1703,22 +1739,6 @@ export class Game {
 
   enterSpectatorMode() {
     this.closeGameEndModal();
-
-    if (this.state) {
-      this.state.isSpectating = true;
-
-      if (this.state.humanPlayerId >= 0) {
-        this.state.parties[this.state.humanPlayerId].control = "computer";
-      }
-
-      const topBarEndTurn = document.getElementById("topBarEndTurn");
-      if (topBarEndTurn) topBarEndTurn.style.display = "none";
-
-      this.selectedArmy = null;
-      this.dynamicDirty = true;
-      this.drawGame();
-      this.nextTurn();
-    }
   }
 
   closeGameEndModal() {
