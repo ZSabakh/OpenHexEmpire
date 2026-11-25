@@ -1,4 +1,5 @@
 import http from "http";
+import { randomUUID } from "node:crypto";
 import express from "express";
 import serveStatic from "serve-static";
 import { fileURLToPath } from "url";
@@ -49,118 +50,118 @@ function rateLimit(socketId, event, maxPerSec = 5) {
 // Max concurrent rooms
 const MAX_ROOMS = 100;
 
-function handleAITurn(roomId, gameRoom, io) {
-  // Prevent concurrent AI turns
-  if (gameRoom.aiTurnInProgress) {
-    console.warn(
-      `[Server] AI turn already in progress for room ${roomId}, skipping`,
-    );
+const RECONNECT_GRACE_MS = 90_000;
+
+function deleteRoom(room) {
+  room.cancelAITurn?.();
+  for (const timer of room.reconnectTimers.values()) clearTimeout(timer);
+  clearTimeout(room.outcomeTimer);
+  gameRooms.delete(room.roomId);
+}
+
+function finishGame(room, outcome) {
+  if (room.outcome) return;
+  room.outcome = outcome;
+  room.cancelAITurn?.();
+  room.aiTurnInProgress = false;
+  io.to(room.roomId).emit("game_ended", outcome);
+  room.outcomeTimer = setTimeout(() => deleteRoom(room), RECONNECT_GRACE_MS);
+}
+
+function publishMove(room, result, playerId) {
+  room.touchActivity();
+  room.movesUsedThisTurn++;
+  const victory = room.checkVictory();
+  io.to(room.roomId).emit("move_executed", { ...result, playerId, outcome: victory });
+  if (victory) finishGame(room, victory);
+}
+
+function advanceTurn(room) {
+  const turn = room.nextTurn();
+  if (turn.gameEnded) {
+    finishGame(room, { reason: "Turn limit reached" });
     return;
   }
-  gameRoom.aiTurnInProgress = true;
+  room.gameLogic.syncPartyArmies();
+  io.to(room.roomId).emit("new_turn", {
+    ...turn,
+    stateHash: room.gameLogic.computeStateHash(),
+  });
+  resumeRoom(room);
+}
 
-  console.log(
-    `[Server] Handling AI turn for room ${roomId}, party ${gameRoom.gameModel.turnParty}`,
-  );
+function finishTurn(room) {
+  const events = room.gameLogic.spawnUnits(room.gameModel.turnParty);
+  if (events.length) io.to(room.roomId).emit("units_spawned", { events });
+  advanceTurn(room);
+}
 
-  // Sync party armies before AI calculations
-  gameRoom.gameLogic.syncPartyArmies();
+function resumeRoom(room) {
+  // An AI turn already in flight can finish. Pause before starting another
+  // when every human is temporarily disconnected.
+  if (!room.gameStarted || room.outcome || room.aiTurnInProgress ||
+      room.players.size === room.reconnectTimers.size) return;
 
-  const partyId = gameRoom.gameModel.turnParty;
+  const partyId = room.gameModel.turnParty;
+  if (room.gameModel.parties[partyId]?.control !== "computer") return;
 
-  // Use shared TurnExecutor
-  TurnExecutor.executeAITurn({
-    partyId: partyId,
-    gameModel: gameRoom.gameModel,
-    gameLogic: gameRoom.gameLogic,
-    bot: gameRoom.bot,
-    onMoveExecute: (bestArmy, move) => {
-      try {
-        console.log(
-          `[Server] AI executing move for army ${bestArmy.id} from (${bestArmy.field.fx},${bestArmy.field.fy}) to (${move.fx},${move.fy}) with prof ${bestArmy.profitability}`,
-        );
-
-        // Execute the move
-        const result = gameRoom.executeMove(bestArmy.field, move);
-
-        if (result.success) {
-          // Broadcast move to all clients with partyId (not socket ID)
-          io.to(roomId).emit("move_executed", {
-            success: true,
-            fromField: result.fromField,
-            toField: result.toField,
-            armyId: result.armyId,
-            events: result.events,
-            playerId: partyId,
-          });
-        }
-      } catch (err) {
-        console.error(
-          `[Server] Error executing AI move in room ${roomId}:`,
-          err.message,
-        );
-      }
+  room.aiTurnInProgress = true;
+  room.gameLogic.syncPartyArmies();
+  room.cancelAITurn = TurnExecutor.executeAITurn({
+    partyId,
+    gameModel: room.gameModel,
+    bot: room.bot,
+    moveBudget: room.maxMovesThisTurn - room.movesUsedThisTurn,
+    onMoveExecute: (army, move) => {
+      const result = room.executeMove(army.field, move);
+      if (result.success) publishMove(room, result, partyId);
     },
     onTurnComplete: () => {
-      try {
-        gameRoom.aiTurnInProgress = false;
-
-        // Spawn units for the CURRENT party (Ending Turn) BEFORE switching turns
-        const currentPartyId = gameRoom.gameModel.turnParty;
-        const spawnEvents = gameRoom.gameLogic.spawnUnits(currentPartyId);
-
-        if (spawnEvents.length > 0) {
-          io.to(roomId).emit("units_spawned", { events: spawnEvents });
-        }
-
-        // Proceed to next turn
-        const turnResult = gameRoom.nextTurn();
-
-        if (turnResult.gameEnded) {
-          if (turnResult.reason === "victory") {
-            io.to(roomId).emit("game_ended", {
-              reason: "victory",
-              winnerPartyId: turnResult.winner,
-            });
-          } else {
-            io.to(roomId).emit("game_ended", { reason: "Turn limit reached" });
-          }
-        } else {
-          gameRoom.gameLogic.syncPartyArmies();
-          const stateHash = gameRoom.gameLogic.computeStateHash();
-
-          io.to(roomId).emit("new_turn", {
-            turn: turnResult.turn,
-            turnParty: turnResult.turnParty,
-            partyName: turnResult.partyName,
-            control: turnResult.control,
-            moraleUpdates: turnResult.moraleUpdates,
-            stateHash: stateHash,
-          });
-
-          // If next turn is also AI, handle it
-          if (turnResult.control === "computer") {
-            handleAITurn(roomId, gameRoom, io);
-          }
-        }
-      } catch (err) {
-        console.error(
-          `[Server] Error completing AI turn in room ${roomId}:`,
-          err.message,
-        );
-        gameRoom.aiTurnInProgress = false;
-      }
+      room.cancelAITurn = null;
+      room.aiTurnInProgress = false;
+      finishTurn(room);
     },
-    getDelay: (isAnimating) => {
-      // Server doesn't have animations, use fixed delay
-      return 500;
-    },
-    checkAnimating: () => {
-      // Server never has animations
-      return false;
-    },
-    initialDelay: 1000, // Wait 1 second before starting AI moves
+    getDelay: () => 500,
   });
+}
+
+function startWhenReady(room) {
+  if (!room.areAllPlayersReady()) return;
+  room.startGame();
+  io.to(room.roomId).emit("all_players_ready");
+  advanceTurn(room);
+}
+
+function releaseSeat(room, socketId) {
+  clearTimeout(room.reconnectTimers.get(socketId));
+  room.reconnectTimers.delete(socketId);
+  const result = room.removePlayer(socketId);
+  if (!result.removed) return;
+
+  io.to(room.roomId).emit("player_left", {
+    playerCount: room.getPlayerCount(),
+    partyId: result.partyId,
+  });
+  if (room.isEmpty()) deleteRoom(room);
+  else {
+    startWhenReady(room);
+    resumeRoom(room);
+  }
+}
+
+function restoreSeat(room, socket, token) {
+  if (typeof token !== "string") return null;
+  const seat = [...room.players.entries()].find(([, player]) => player.reconnectToken === token);
+  if (!seat || !room.reconnectTimers.has(seat[0])) return null;
+
+  const [oldId, player] = seat;
+  clearTimeout(room.reconnectTimers.get(oldId));
+  room.reconnectTimers.delete(oldId);
+  room.players.delete(oldId);
+  player.playerId = socket.id;
+  room.players.set(socket.id, player);
+  if (player.partyId !== null) room.factionSelections[player.partyId].socketId = socket.id;
+  return { success: true, partyId: player.partyId, playerName: player.name };
 }
 
 app.set("port", process.env.PORT || 3000);
@@ -193,7 +194,8 @@ io.on("connection", (socket) => {
       return;
     }
 
-    const roomId = sanitizeRoomId(data.roomId) || `room_${Date.now()}`;
+    if (socketToRoom.has(socket.id)) return;
+    const roomId = `room_${randomUUID()}`;
     const mapSeed = Number.isFinite(data.mapSeed)
       ? data.mapSeed
       : Math.floor(Math.random() * 999999);
@@ -207,9 +209,12 @@ io.on("connection", (socket) => {
     if (result.success) {
       socket.join(roomId);
 
+      const reconnectToken = randomUUID();
+      gameRoom.players.get(socket.id).reconnectToken = reconnectToken;
       const mapData = gameRoom.getMapData();
 
       socket.emit("game_created", {
+        reconnectToken,
         success: true,
         roomId: roomId,
         mapSeed: mapSeed,
@@ -246,40 +251,38 @@ io.on("connection", (socket) => {
       return;
     }
 
-    const result = gameRoom.addPlayer(socket.id, playerName);
+    if (socketToRoom.has(socket.id)) return;
+    const restored = restoreSeat(gameRoom, socket, data.reconnectToken);
+    const result = restored ?? gameRoom.addPlayer(socket.id, playerName);
+    if (!result.success) {
+      socket.emit("game_joined", { success: false, error: result.error });
+      return;
+    }
 
-    if (result.success) {
-      socket.join(roomId);
+    const player = gameRoom.players.get(socket.id);
+    player.reconnectToken ??= randomUUID();
+    socket.join(roomId);
+    socketToRoom.set(socket.id, roomId);
+    gameRoom.touchActivity();
 
-      const mapData = gameRoom.getMapData();
-
-      socket.emit("game_joined", {
-        success: true,
-        roomId: roomId,
-        partyId: result.partyId,
-        playerName: result.playerName,
-        gameState: gameRoom.getGameState(),
-      });
-
-      socket.emit("map_data", mapData);
-
-      const factionSelections = gameRoom.getFactionSelections();
-      socket.emit("existing_factions", { factionSelections });
-
+    socket.emit("game_joined", {
+      ...result,
+      roomId,
+      reconnectToken: player.reconnectToken,
+      resumed: Boolean(restored),
+      gameState: gameRoom.getGameState(),
+    });
+    if (!restored) {
+      socket.emit("map_data", gameRoom.getMapData());
       socket.to(roomId).emit("player_joined", {
-        playerName: result.playerName,
-        partyId: result.partyId,
+        playerName: player.name,
+        partyId: player.partyId,
         playerCount: gameRoom.getPlayerCount(),
       });
-
-      socketToRoom.set(socket.id, roomId);
-      console.log(`[Server] ${playerName} joined room ${roomId}`);
-    } else {
-      socket.emit("game_joined", {
-        success: false,
-        error: result.error,
-      });
     }
+    socket.emit("existing_factions", { factionSelections: gameRoom.getFactionSelections() });
+    startWhenReady(gameRoom);
+    resumeRoom(gameRoom);
   });
 
   socket.on("faction_selected", (data) => {
@@ -292,7 +295,7 @@ io.on("connection", (socket) => {
       if (isNaN(partyId) || partyId < 0 || partyId > 3) return;
 
       const gameRoom = gameRooms.get(roomId);
-      if (!gameRoom) return;
+      if (!gameRoom || socketToRoom.get(socket.id) !== roomId) return;
 
       const result = gameRoom.setFactionSelection(
         partyId,
@@ -327,8 +330,7 @@ io.on("connection", (socket) => {
     const isReady = data.isReady;
 
     const gameRoom = gameRooms.get(roomId);
-    if (gameRoom) {
-      gameRoom.setPlayerReady(socket.id, isReady);
+    if (gameRoom && gameRoom.setPlayerReady(socket.id, isReady === true)) {
 
       const readyCount = gameRoom.getReadyCount();
       const totalPlayers = gameRoom.getTotalPlayersWithFactions();
@@ -343,45 +345,7 @@ io.on("connection", (socket) => {
         readyStatus: gameRoom.getReadyStatus(),
       });
 
-      if (gameRoom.areAllPlayersReady()) {
-        console.log(
-          `[Server] All players ready in room ${roomId}, starting game`,
-        );
-        gameRoom.startGame();
-        io.to(roomId).emit("all_players_ready");
-
-        const turnResult = gameRoom.nextTurn();
-
-        // FIX: REMOVED spawnUnits call here.
-        // Units are now initialized in GameRoom.initializeGame().
-        // Players play Turn 1 with starting units. Reinforcements come at end_turn.
-
-        if (turnResult.gameEnded) {
-          if (turnResult.reason === "victory") {
-            io.to(roomId).emit("game_ended", {
-              reason: "victory",
-              winnerPartyId: turnResult.winner,
-            });
-          }
-        } else {
-          gameRoom.gameLogic.syncPartyArmies();
-          const stateHash = gameRoom.gameLogic.computeStateHash();
-
-          io.to(roomId).emit("new_turn", {
-            turn: turnResult.turn,
-            turnParty: turnResult.turnParty,
-            partyName: turnResult.partyName,
-            control: turnResult.control,
-            moraleUpdates: turnResult.moraleUpdates,
-            stateHash: stateHash,
-          });
-
-          // If next turn is also AI, handle it
-          if (turnResult.control === "computer") {
-            handleAITurn(roomId, gameRoom, io);
-          }
-        }
-      }
+      startWhenReady(gameRoom);
     }
   });
 
@@ -415,6 +379,8 @@ io.on("connection", (socket) => {
         return;
       }
 
+      if (!gameRoom.gameStarted || gameRoom.outcome) return;
+
       // Block moves during AI turns
       if (gameRoom.aiTurnInProgress) {
         socket.emit("move_error", { error: "AI turn in progress" });
@@ -440,25 +406,7 @@ io.on("connection", (socket) => {
         return;
       }
 
-      // Track activity and increment move counter
-      gameRoom.touchActivity();
-      gameRoom.movesUsedThisTurn++;
-
-      const player = gameRoom.players.get(socket.id);
-      const partyId = player ? player.partyId : -1;
-
-      console.log(
-        `[Server] Move executed by party ${partyId} in room ${roomId} (${gameRoom.movesUsedThisTurn}/${gameRoom.maxMovesThisTurn})`,
-      );
-
-      io.to(roomId).emit("move_executed", {
-        success: true,
-        fromField: result.fromField,
-        toField: result.toField,
-        armyId: result.armyId,
-        events: result.events,
-        playerId: partyId,
-      });
+      publishMove(gameRoom, result, gameRoom.players.get(socket.id).partyId);
     } catch (err) {
       console.error(`[Server] Error in move_unit:`, err.message);
       socket.emit("move_error", { error: "Server error processing move" });
@@ -477,6 +425,8 @@ io.on("connection", (socket) => {
         socket.emit("turn_error", { error: "Game room not found" });
         return;
       }
+
+      if (!gameRoom.gameStarted || gameRoom.outcome) return;
 
       // Block end_turn during AI turns
       if (gameRoom.aiTurnInProgress) {
@@ -506,50 +456,9 @@ io.on("connection", (socket) => {
         `[Server] Player ${player.name} ended their turn in room ${roomId}`,
       );
 
-      // Spawn units for the CURRENT party (Ending Turn) BEFORE switching turns
-      const currentPartyId = gameRoom.gameModel.turnParty;
-      const spawnEvents = gameRoom.gameLogic.spawnUnits(currentPartyId);
-
-      if (spawnEvents.length > 0) {
-        io.to(roomId).emit("units_spawned", { events: spawnEvents });
-      }
-
-      const turnResult = gameRoom.nextTurn();
+      gameRoom.touchActivity();
+      finishTurn(gameRoom);
       gameRoom.turnEndInProgress = false;
-
-      if (turnResult.gameEnded) {
-        if (turnResult.reason === "victory") {
-          io.to(roomId).emit("game_ended", {
-            reason: "victory",
-            winnerPartyId: turnResult.winner,
-          });
-        } else {
-          io.to(roomId).emit("game_ended", { reason: "Turn limit reached" });
-        }
-        // Clean up room after game ends (with delay to let clients process)
-        setTimeout(() => {
-          if (gameRooms.has(roomId)) {
-            gameRooms.delete(roomId);
-            console.log(`[Server] Room ${roomId} cleaned up after game end`);
-          }
-        }, 30000); // 30 second grace period
-      } else {
-        gameRoom.gameLogic.syncPartyArmies();
-        const stateHash = gameRoom.gameLogic.computeStateHash();
-
-        io.to(roomId).emit("new_turn", {
-          turn: turnResult.turn,
-          turnParty: turnResult.turnParty,
-          partyName: turnResult.partyName,
-          control: turnResult.control,
-          moraleUpdates: turnResult.moraleUpdates,
-          stateHash: stateHash,
-        });
-
-        if (turnResult.control === "computer") {
-          handleAITurn(roomId, gameRoom, io);
-        }
-      }
     } catch (err) {
       console.error(`[Server] Error in end_turn:`, err.message);
       if (gameRoom) gameRoom.turnEndInProgress = false;
@@ -570,6 +479,8 @@ io.on("connection", (socket) => {
         `[Server] Resync requested by ${socket.id} for room ${roomId}`,
       );
 
+      if (socketToRoom.get(socket.id) !== roomId) return;
+
       // Send full game state to the requesting client
       socket.emit("full_resync", gameRoom.getGameState());
     } catch (err) {
@@ -578,27 +489,25 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("disconnect", () => {
-    console.log(`[Server] Client disconnected: ${socket.id}`);
+  socket.on("leave_game", (acknowledge) => {
+    const room = gameRooms.get(socketToRoom.get(socket.id));
+    socketToRoom.delete(socket.id);
+    if (room) {
+      socket.leave(room.roomId);
+      releaseSeat(room, socket.id);
+    }
+    if (typeof acknowledge === "function") acknowledge();
+  });
 
-    const roomId = socketToRoom.get(socket.id);
-    if (roomId) {
-      socketToRoom.delete(socket.id);
-      const gameRoom = gameRooms.get(roomId);
-      if (gameRoom) {
-        const result = gameRoom.removePlayer(socket.id);
-        if (result.removed) {
-          io.to(roomId).emit("player_left", {
-            playerCount: gameRoom.getPlayerCount(),
-            partyId: result.partyId,
-          });
-
-          if (gameRoom.isEmpty()) {
-            gameRooms.delete(roomId);
-            console.log(`[Server] Room ${roomId} deleted (empty)`);
-          }
-        }
-      }
+  socket.on("disconnect", (reason) => {
+    console.log(`[Server] Client disconnected: ${socket.id} (${reason})`);
+    const room = gameRooms.get(socketToRoom.get(socket.id));
+    socketToRoom.delete(socket.id);
+    if (room?.players.has(socket.id)) {
+      room.touchActivity();
+      room.reconnectTimers.set(socket.id, setTimeout(() => {
+        releaseSeat(room, socket.id);
+      }, RECONNECT_GRACE_MS));
     }
 
     rateLimits.forEach((_, key) => {
@@ -615,7 +524,7 @@ setInterval(
         console.log(
           `[Server] Room ${roomId} cleaned up due to inactivity (${Math.round(gameRoom.inactivityTimeout / 60000)} min timeout)`,
         );
-        gameRooms.delete(roomId);
+        deleteRoom(gameRoom);
       }
     }
   },

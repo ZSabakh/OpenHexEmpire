@@ -7,17 +7,34 @@ $(function(){
   const game = new Game();
   const urlParams = new URLSearchParams(window.location.search);
   const roomId = urlParams.get('room');
+  const board = document.getElementById('gameBoard');
+  if (roomId) board.style.display = 'none';
   let myPartyId = null;
   let roomPlayers = {};
   let isMultiplayer = false;
   let isReady = false;
   let readyCount = 0;
   let totalPlayers = 0;
+  let restoringRoom = false;
+
+  function showRoomStatus(message, canStartNew = false) {
+    roomStatus.hidden = false;
+    roomStatus.replaceChildren(document.createTextNode(message));
+    if (canStartNew) {
+      const button = document.createElement('button');
+      button.className = 'game-control-btn';
+      button.textContent = 'Create New Match';
+      button.onclick = () => socketManager.leaveGame(window.location.pathname);
+      roomStatus.append(' ', button);
+    }
+  }
 
   socketManager.connect().then(() => {
     if (roomId) {
       socketManager.joinGame(roomId, 'Player');
     }
+  }).catch(() => {
+    if (roomId) showRoomStatus('Could not connect to the game server.', true);
   });
 
   window.addEventListener('gameCreated', (e) => {
@@ -27,14 +44,48 @@ $(function(){
     history.pushState({}, '', `?room=${data.roomId}`);
   });
 
-  window.addEventListener('gameJoined', (e) => {
+  window.addEventListener('gameJoined', async (e) => {
     const data = e.detail;
     isMultiplayer = true;
     updateMultiplayerUI(data.roomId);
+    if (!data.resumed) {
+      roomStatus.hidden = true;
+      return;
+    }
+
+    restoringRoom = true;
+    game.connectionPending = true;
+    showRoomStatus('Restoring match…');
+    if (game.state?.mapSeed !== data.gameState.mapSeed) {
+      await game.loadServerMap(data.gameState);
+    }
+    game.setMultiplayerMode(socketManager, data.roomId);
+    myPartyId = data.partyId;
+    socketManager.requestResync(data.roomId);
+  });
+
+  window.addEventListener('roomDisconnected', () => {
+    restoringRoom = true;
+    game.connectionPending = true;
+    game.clearActionQueue();
+    game.clearTurnControls();
+    showRoomStatus('Reconnecting…');
+  });
+  window.addEventListener('roomConnectionFailed', () => {
+    if (roomId || socketManager.getRoomId()) {
+      showRoomStatus('Could not reconnect to the match.', true);
+    }
+  });
+  window.addEventListener('roomJoinFailed', ({ detail }) => {
+    const message = detail.error === 'Game room not found'
+      ? 'This match is no longer available.'
+      : detail.error;
+    showRoomStatus(message, true);
   });
 
   window.addEventListener('mapDataReceived', (e) => {
     game.loadServerMap(e.detail).then(() => {
+      board.style.display = 'inline-block';
       if (Object.keys(roomPlayers).length > 0 && game.state) {
         game.updateMultiplayerPlayers(roomPlayers);
       }
@@ -192,6 +243,12 @@ $(function(){
   multiplayerHint.style.cssText = 'text-align: center; color: #aaa; font-size: 12px; margin-top: 10px; padding: 10px; background: rgba(33, 150, 243, 0.1); border-radius: 4px;';
   multiplayerHint.innerHTML = '<i class="material-icons" style="font-size: 14px; vertical-align: middle;">info</i> Click "Start Battle" to create a multiplayer room and share the URL with friends!';
   document.querySelector('.container .section .row .col').insertBefore(multiplayerHint, document.getElementById('multiplayerBar'));
+  const roomStatus = document.createElement('div');
+  roomStatus.setAttribute('role', 'status');
+  roomStatus.style.cssText = 'padding: 12px; text-align: center;';
+  roomStatus.hidden = !roomId;
+  roomStatus.textContent = 'Joining room…';
+  multiplayerHint.after(roomStatus);
   
   topBarStartBattle.onclick = function() {
     if (multiplayerHint) multiplayerHint.style.display = 'none';
@@ -256,6 +313,7 @@ $(function(){
   });
 
   window.addEventListener('allPlayersReady', () => {
+    if (restoringRoom) return;
     console.log('All players ready, starting battle!');
     hideReadyButton();
     game.waitingForReady = false;
@@ -269,18 +327,21 @@ $(function(){
   });
 
   window.addEventListener('newTurn', (e) => {
+    if (restoringRoom) return;
     const turnData = e.detail;
     console.log('New turn event received:', turnData);
     game.handleNewTurn(turnData);
   });
 
   window.addEventListener('moveExecuted', (e) => {
+    if (restoringRoom) return;
     const moveData = e.detail;
     console.log('Move executed event received:', moveData);
     game.handleMoveExecuted(moveData);
   });
 
   window.addEventListener('unitsSpawned', (e) => {
+    if (restoringRoom) return;
     const data = e.detail;
     console.log('Units spawned event received:', data);
     game.handleUnitsSpawned(data);
@@ -299,26 +360,34 @@ $(function(){
   });
 
   window.addEventListener('fullResync', (e) => {
+    if (restoringRoom) {
+      restoringRoom = false;
+      game.connectionPending = false;
+      roomStatus.hidden = true;
+      board.style.display = 'inline-block';
+      game.state.humanPlayerId = myPartyId ?? -1;
+      game.battleStarted = e.detail.gameStarted;
+      game.waitingForReady = !game.battleStarted && myPartyId !== null;
+      readyCount = Object.values(e.detail.readyStatus).filter(Boolean).length;
+      isReady = e.detail.readyStatus[myPartyId] === true;
+      if (myPartyId !== null) {
+        topBarStartBattle.style.display = 'none';
+        if (game.waitingForReady) {
+          showReadyButton();
+          const readyButton = document.getElementById('readyButton');
+          readyButton.textContent = isReady ? 'READY ✓' : 'READY';
+        } else hideReadyButton();
+      }
+      game.handleFullResync(e.detail);
+      return;
+    }
     console.warn('Full resync received from server');
     M.toast({html: 'State resynchronized with server', classes: 'orange'});
     game.handleFullResync(e.detail);
   });
 
   window.addEventListener('gameEnded', (e) => {
-    const { reason, winnerPartyId } = e.detail;
-    
-    // If I am the winner
-    if (reason === 'victory' && winnerPartyId === game.state.humanPlayerId) {
-        game.showGameEndModal('victory');
-    } 
-    // If someone else won (Spectator Victory)
-    else if (reason === 'victory') {
-        const winnerName = game.state.parties[winnerPartyId].name;
-        game.showGameEndModal('spectator_victory', winnerName);
-    }
-    else {
-        M.toast({html: `Game ended: ${reason}`, classes: 'orange'});
-    }
+    if (!restoringRoom) game.handleGameOutcome(e.detail);
   });
 
   function showReadyButton() {

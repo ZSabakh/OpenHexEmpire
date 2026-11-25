@@ -28,7 +28,8 @@ export class TurnExecutor {
             onTurnComplete,
             getDelay,
             checkAnimating,
-            initialDelay = 1000
+            initialDelay = 1000,
+            moveBudget = Infinity
         } = config;
 
         // Clear bot cache for fresh calculations
@@ -37,14 +38,17 @@ export class TurnExecutor {
         // Get movable armies and calculate move points
         const party = gameModel.parties[partyId];
         const movableArmies = party.armies.filter(army => !army.moved);
-        const movePoints = GameRules.getMovePoints(movableArmies);
+        const movePoints = Math.min(moveBudget, GameRules.getMovePoints(movableArmies));
 
         console.log(`[TurnExecutor] Party ${partyId} has ${movableArmies.length} movable armies, ${movePoints} move points`);
 
         let moveIndex = 0;
         let aborted = false;
 
+        let timer;
+        let cancelled = false;
         const executeMove = () => {
+            if (cancelled) return;
             // Check if aborted due to previous error
             if (aborted) {
                 console.warn(`[TurnExecutor] AI turn aborted for party ${partyId} after error`);
@@ -100,10 +104,14 @@ export class TurnExecutor {
             const isAnimating = checkAnimating ? checkAnimating() : false;
             const delay = getDelay(isAnimating);
 
-            setTimeout(executeMove, delay);
+            if (!cancelled) timer = setTimeout(executeMove, delay);
         };
 
         // Start execution after initial delay
-        setTimeout(executeMove, initialDelay);
+        timer = setTimeout(executeMove, initialDelay);
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
     }
 }

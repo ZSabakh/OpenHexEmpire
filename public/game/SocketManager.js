@@ -5,6 +5,7 @@ export class SocketManager {
     this.roomId = null;
     this.partyId = null;
     this.playerName = null;
+    this.reconnectToken = null;
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 10;
   }
@@ -45,6 +46,9 @@ export class SocketManager {
           reject(error);
         }
       });
+      this.socket.io.on("reconnect_failed", () => {
+        window.dispatchEvent(new CustomEvent("roomConnectionFailed"));
+      });
 
       // Set up other event listeners
       this.setupEventListeners();
@@ -53,11 +57,11 @@ export class SocketManager {
 
   setupEventListeners() {
     this.socket.on("game_created", (data) => {
-      console.log("Game created:", data);
       if (data.success) {
         this.roomId = data.roomId;
         this.partyId = data.partyId;
         this.playerName = data.playerName;
+        this.rememberSeat(data.reconnectToken);
 
         // Dispatch custom event for the game to handle
         window.dispatchEvent(new CustomEvent("gameCreated", { detail: data }));
@@ -67,16 +71,16 @@ export class SocketManager {
     });
 
     this.socket.on("game_joined", (data) => {
-      console.log("Game joined:", data);
       if (data.success) {
         this.roomId = data.roomId;
         this.partyId = data.partyId;
         this.playerName = data.playerName;
+        this.rememberSeat(data.reconnectToken);
 
         // Dispatch custom event for the game to handle
         window.dispatchEvent(new CustomEvent("gameJoined", { detail: data }));
       } else {
-        console.error("Failed to join game:", data.error);
+        window.dispatchEvent(new CustomEvent("roomJoinFailed", { detail: data }));
       }
     });
 
@@ -159,12 +163,13 @@ export class SocketManager {
     });
 
     this.socket.on("resync_error", (data) => {
-      console.error("Resync error:", data.error);
+      window.dispatchEvent(new CustomEvent("roomJoinFailed", { detail: data }));
     });
 
     this.socket.on("disconnect", (reason) => {
       console.log("Disconnected from server:", reason);
       this.connected = false;
+      if (this.roomId) window.dispatchEvent(new CustomEvent("roomDisconnected"));
       if (reason === "io server disconnect") {
         // Server forced disconnect, try manual reconnect
         this.socket.connect();
@@ -191,10 +196,41 @@ export class SocketManager {
       return;
     }
 
+    let reconnectToken = this.roomId === roomId ? this.reconnectToken : null;
+    try {
+      reconnectToken ??= sessionStorage.getItem(`openhex-seat:${roomId}`);
+    } catch {
+      // Embedded browsers can deny storage. In-memory reconnect still works.
+    }
     this.socket.emit("join_game", {
       roomId: roomId,
       playerName: playerName,
+      reconnectToken,
     });
+  }
+
+  rememberSeat(token) {
+    this.reconnectToken = token;
+    try {
+      sessionStorage.setItem(`openhex-seat:${this.roomId}`, token);
+    } catch {
+      // Keep the token in memory when tab storage is unavailable.
+    }
+  }
+
+  leaveGame(destination) {
+    try {
+      sessionStorage.removeItem(`openhex-seat:${this.roomId}`);
+    } catch {
+      // No persisted seat to clear.
+    }
+    this.roomId = null;
+    this.reconnectToken = null;
+    if (this.connected) {
+      this.socket.timeout(500).emit("leave_game", () => window.location.assign(destination));
+    } else {
+      window.location.assign(destination);
+    }
   }
 
   isConnected() {
